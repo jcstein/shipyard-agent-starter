@@ -1,0 +1,30 @@
+{
+  "name": "shipyard-agent-starter",
+  "version": "0.1.0",
+  "description": "Hands-on starter for SHIPYARD MAKE ME MONEY: pay Houston Inference on Eden, log receipts, post them to Celestia Mocha.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "demo": "node --env-file-if-exists=.env src/demo.ts",
+    "verify": "node --env-file-if-exists=.env src/verify.ts",
+    "post": "node --env-file-if-exists=.env src/post.ts",
+    "checkout": "node --env-file-if-exists=.env src/checkout.ts",
+    "webhook": "node --env-file-if-exists=.env src/webhook.ts",
+    "human": "node --env-file-if-exists=.env src/human.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "eslint": "^10.13.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.46.0"
+  }
+}
