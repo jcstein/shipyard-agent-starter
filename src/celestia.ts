@@ -182,5 +182,5 @@ export function localPostMatches(lines: string[], post: PostRecord): void {
 }
 
 export function mochaReadHint(): string {
-  return `Reads can use ${MOCHA_PUBLIC_RPC}. Submitting a blob needs your own light node or a hosted node API with your token.`;
+  return `Run \`npm run celestia:build\` (Go 1.25.x; Go 1.26 is not supported) and fund the address from \`npm run celestia:address\` at the Mocha faucet. The helper submits via the public core gRPC endpoint and reads ${MOCHA_PUBLIC_RPC}. Set CELESTIA_RPC_URL only if you want your own light node instead.`;
 }

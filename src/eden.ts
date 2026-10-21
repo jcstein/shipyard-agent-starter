@@ -9,7 +9,11 @@ export const HOUSTON_INFERENCE = "https://inference.bot.fun/v1";
 
 /** Mocha-5 testnet. Blobs posted here are logs, not revenue and not Eden payments. */
 export const MOCHA_CHAIN = "mocha-5";
+/** Public DA JSON-RPC. Reads only. The helper uses this to fetch blobs. */
 export const MOCHA_PUBLIC_RPC = "https://public-endpoint.celestia-mocha.quiknode.pro";
+/** Public consensus gRPC. The helper submits PayForBlobs here over TLS. */
+export const MOCHA_PUBLIC_CORE_GRPC = "public-endpoint.celestia-mocha.quiknode.pro:9090";
+export const MOCHA_FAUCET = "https://mocha.celenium.io/faucet";
 
 /** 10-byte v0 namespace id. The same id is used by every team that keeps the default. */
 export const APP_NAMESPACE_ID = "shipyardmm";

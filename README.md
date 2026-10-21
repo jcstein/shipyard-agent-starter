@@ -42,8 +42,11 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | --- | --- |
 | `npm run preflight` | Reads the Eden address, TIA balance, and a fresh 402. Prints go or no-go. Does not sign or broadcast. |
 | `npm run demo` | Dry-run by default. `DEMO_MODE=live` pays for one completion. |
-| `npm run verify` | Checks the hash chain. Fetches a real Mocha blob when one was posted. |
-| `npm run post` | Submits unposted receipt lines to your celestia-node. |
+| `npm run celestia:build` | Builds the Mocha helper with Go 1.25.1. |
+| `npm run celestia:address` | Prints the celestia address to fund from the Mocha faucet. |
+| `npm run celestia:head` | Reads the public Mocha DA chain head. |
+| `npm run verify` | Checks the hash chain. Reads a real Mocha blob back when one was posted. |
+| `npm run post` | Submits unposted receipt lines with the Mocha helper. |
 | `npm run checkout` | Creates a Stripe Checkout Session in the mode of your secret key. |
 | `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt. |
 | `npm run human -- --who "Ada" --what "paused spending" --why "quote was too high"` | Appends a `human` receipt. |
@@ -79,7 +82,7 @@ NativeEscrow is `0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8` on Eden. The client
 
 The quote amount is a **ceiling**. `upto` means the facilitator can settle less and refund the rest. `tiaQuoted` on a receipt is that ceiling. `tiaCharged` is the settled wei when the `payment-response` header includes it, and `null` when it does not. Do not treat the ceiling as the cost, and do not treat either number as revenue.
 
-**Logs out.** `npm run post` batches receipt lines that are not in `posts.json` yet and submits one blob to a celestia-node light node (`blob.Submit`, then `blob.GetAll` to record the commitment). `npm run verify` calls `blob.Get` and checks the bytes match the local lines.
+**Logs out.** `npm run post` batches receipt lines that are not in `posts.json` yet and submits one blob through the Go helper: the public Mocha core gRPC endpoint takes the PayForBlobs transaction, and the public DA endpoint reads the blob back before `posts.json` is written. `npm run verify` reads that blob again and checks the bytes match the local lines. Set `CELESTIA_RPC_URL` to send those calls to your own light node instead.
 
 ## Spend cap
 
@@ -111,8 +114,13 @@ See `.env.example`. The ones that matter:
 | `EDEN_RPC_URL` | Balance RPC for preflight. Default `https://rpc.eden.gateway.fm/` |
 | `TRACE_DIR` | Live HTTP traces. Default `traces/`. Gitignored. |
 | `ESCROW_ADDRESS` | Pinned NativeEscrow |
-| `CELESTIA_RPC_URL` | celestia-node RPC, usually `http://127.0.0.1:26658` |
-| `CELESTIA_AUTH_TOKEN` | Bearer token from the node |
+| `CELESTIA_HELPER` | Mocha helper binary. Default `celestia/mocha-helper`. |
+| `CELESTIA_KEYRING` | Local test keyring directory. Default `celestia-keys`. Gitignored. |
+| `CELESTIA_KEY_NAME` | Key name inside that keyring. Default `shipyard`. |
+| `CELESTIA_DA_URL` | DA JSON-RPC used to read blobs. Default `https://public-endpoint.celestia-mocha.quiknode.pro`. |
+| `CELESTIA_CORE_GRPC` | Core gRPC used to submit blobs. Default `public-endpoint.celestia-mocha.quiknode.pro:9090`. |
+| `CELESTIA_RPC_URL` | Optional. When set, post and verify use this light-node JSON-RPC instead of the helper. |
+| `CELESTIA_AUTH_TOKEN` | Bearer token for that light node. |
 | `CELESTIA_NAMESPACE` | Default `shipyardmm` (10-byte v0 namespace id) |
 | `STRIPE_SECRET_KEY` | Stripe secret. Use `sk_test_…` until you intend to charge. |
 | `STRIPE_WEBHOOK_SECRET` | Webhook signing secret |
@@ -152,32 +160,41 @@ DEMO_MODE=live HOUSTON_RETRY_OTHER_SIGN_FIELD=1 SPEND_CAP_TIA=0.05 npm run demo
 
 If the flag was unset and the paid retry is rejected, stop. The error names the deposit transaction, the paymentId, and `refundAfter`. Do not start another live run to reuse that paymentId. A new run requests a new quote and would deposit again. NativeEscrow reverts a second `deposit` for a paymentId that was already used. The TIA stays in escrow until the facilitator settles it, or until `refundAfter`, when the buyer can call `refundExpired(paymentId)` on the escrow. Anyone can submit that call. The refund goes to the buyer. The quote amount is a ceiling, not a settled charge.
 
-Mocha faucet TIA is only for posting blobs from a light node. It does not pay Houston Inference. The faucet is documented on the [Mocha testnet](https://docs.celestia.org/operate/networks/mocha-testnet/) page: [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet), and the `#mocha-faucet` Discord command. Using it does not entitle anyone to a mainnet airdrop.
+Mocha faucet TIA funds the helper's celestia address so `npm run post` can publish a testnet log. It does not pay Houston Inference. The faucet is [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet). Using it does not entitle anyone to a mainnet airdrop.
 
 ## Post the log to Mocha
 
-Mocha-5 is a testnet. A blob there proves the bytes were published, nothing more.
+Mocha-5 is a testnet. A blob there proves the bytes were published, nothing more. It does not pay for Eden inference.
 
-Run a light node using the [light-node quickstart](https://docs.celestia.org/operate/data-availability/light-node/quickstart/):
+`npm run post` and `npm run verify` shell out to `celestia/mocha-helper`. The helper uses the official celestia-node Go client (`github.com/celestiaorg/celestia-node/api/client`, tag `v0.28.2-mocha`). It submits the existing receipt bytes — the same JSON `blobPayload` already builds, under the `shipyardmm` namespace — to the public Mocha core gRPC endpoint `public-endpoint.celestia-mocha.quiknode.pro:9090` with TLS. It reads them back from the public DA JSON-RPC `https://public-endpoint.celestia-mocha.quiknode.pro`. You do not run a light node for this path.
 
-```bash
-celestia light init --p2p.network mocha
-celestia light start \
-  --core.ip public-endpoint.celestia-mocha.quiknode.pro \
-  --core.port 9090 --core.tls --p2p.network mocha
-```
-
-Fund the node's Celestia address from the Mocha faucet, then create a token as documented in the [advanced light-node page](https://docs.celestia.org/operate/data-availability/light-node/advanced/):
+The helper builds with Go 1.25.x. Go 1.26 is not supported by a transitive dependency (`bytedance/sonic`). `npm run celestia:build` sets `GOTOOLCHAIN=go1.25.1`, so the `go` on your PATH can be older or newer.
 
 ```bash
-celestia light auth admin --p2p.network mocha
+npm run celestia:build
+npm run celestia:address
 ```
 
-Set `CELESTIA_RPC_URL=http://127.0.0.1:26658` and `CELESTIA_AUTH_TOKEN` to that token. `npm run post` sends `blob.Submit` with an empty tx config so the node estimates gas. The namespace is the 29-byte v0 form of `shipyardmm` (version byte `0`, id in the last 10 bytes).
+The address command prints a `celestia1…` address. The first time, it also writes a mnemonic to `celestia-keys/shipyard.mnemonic` (mode 0600). The keyring is the Cosmos **test** backend: unencrypted, local, and gitignored. Treat that directory like a private key. Fund the address from the Mocha faucet: [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet).
 
-Hosted option: a [Quicknode Celestia](https://www.quicknode.com/chains/celestia) node API speaks the same JSON-RPC. Point `CELESTIA_RPC_URL` and `CELESTIA_AUTH_TOKEN` at the endpoint they give you. The public read URL `https://public-endpoint.celestia-mocha.quiknode.pro` answers header and blob reads for development. Do not use it as your submit wallet. It has no SLA.
+`npm run celestia:head` reads the public DA chain head and prints the chain id and height. It does not need a funded account.
 
-`npm run verify` refetches by height, namespace, and commitment. A mock record never contacts the network.
+Append a receipt (`npm run human`, a sale, or an inference), then:
+
+```bash
+npm run post
+npm run verify
+```
+
+`post` writes `posts.json` only after the helper has submitted the blob and read the same bytes back. `verify` fetches by height, namespace, and commitment and checks those bytes against the local lines. A mock post never contacts the network and never starts the helper. An account with no Mocha TIA makes `post` exit 1 with `insufficient funds` and leaves `posts.json` unchanged.
+
+Mocha faucet TIA pays only this helper's blob transactions. It is not Eden TIA.
+
+### Optional light node
+
+Set `CELESTIA_RPC_URL` (and `CELESTIA_AUTH_TOKEN` when the node wants a bearer token) to use a celestia-node JSON-RPC endpoint instead of the helper. `npm run post` then calls `blob.Submit` and `blob.GetAll` on that URL, and `npm run verify` calls `blob.Get`. Leave `CELESTIA_RPC_URL` unset to use the helper. Do not put the public DA URL in `CELESTIA_RPC_URL`; that endpoint is for reads, and the helper already uses it.
+
+The [light-node quickstart](https://docs.celestia.org/operate/data-availability/light-node/quickstart/) is still the path for running your own node. The namespace is the 29-byte v0 form of `shipyardmm` (version byte `0`, id in the last 10 bytes). A hosted [Quicknode Celestia](https://www.quicknode.com/chains/celestia) node API speaks the same JSON-RPC if you point `CELESTIA_RPC_URL` at it. The public endpoints have no SLA.
 
 ## What you can verify
 
@@ -197,7 +214,8 @@ Exercised against live services while building this starter:
 - `POST /v1/deposit/send` rejects a body without `paymentId`, and a bogus signed transaction returns `failed to broadcast transaction`. The success body was not observed.
 - `GET /v1/deposit/status/:txHash` returns `pending` for an unknown hash and `confirmed` for a hash that is already on Eden.
 - `eth_chainId` on `https://rpc.eden.gateway.fm/` returns `0x2ca` (714). Preflight uses that RPC for the balance and refuses any other chain id.
-- Public Mocha RPC `header.NetworkHead` reports `chain_id` `mocha-5`. `blob.Get`, `blob.GetAll`, and `blob.Submit` accept the parameter shapes this client sends. No blob was submitted.
+- Public Mocha RPC `header.NetworkHead` reports `chain_id` `mocha-5`. The light-node JSON-RPC client sends `blob.Get`, `blob.GetAll`, and `blob.Submit` in the shapes celestia-node accepts. No blob was submitted on that path.
+- The Go helper, built with Go 1.25.1, against the public Mocha endpoints on 21 Oct 2026. `header.NetworkHead` on `https://public-endpoint.celestia-mocha.quiknode.pro` returned `mocha-5` (height 1893957 directly, and 1893965 through `npm run celestia:head`). `blob.Get` for 32 zero bytes at height 1893957 returned `blob: not found`, so the read reached the node. A throwaway key `celestia1zkf0tnwpqe08wc83ny0260wm6hs5c9tzd4cuwy` was created in a local test keyring. `npm run post` with that key connected to core gRPC `public-endpoint.celestia-mocha.quiknode.pro:9090` over TLS, read a zero balance (`0utia`; the account does not exist yet), and exited 1 with `insufficient funds: celestia1zkf0tnwpqe08wc83ny0260wm6hs5c9tzd4cuwy balance 0utia. Fund this address at https://mocha.celenium.io/faucet`. No PayForBlobs transaction was broadcast, and `posts.json` was not written. The faucet was not used. The mnemonic stayed on the local disk and is not in this repo.
 
 Not exercised, because there is no funded key in this environment:
 
@@ -206,7 +224,7 @@ Not exercised, because there is no funded key in this environment:
 - A `Payment-Signature` accepted by Houston after a deposit. The client signs the nonce bytes unless `HOUSTON_SIGN_FIELD=paymentId`. If that retry is rejected as an invalid signature and `HOUSTON_RETRY_OTHER_SIGN_FIELD=1`, the process tries the other field once on the same paymentId and does not deposit again. Whether either field is accepted is unconfirmed. Do not deposit the same paymentId twice.
 - Token counts and the settled TIA amount on a real completion (`payment-response`).
 - A Stripe API call. Webhook signature checks are unit-tested with a local secret.
-- A Mocha round trip of this app's blob. `npm run post` is untested against a funded light node.
+- A funded Mocha submit. The helper reads the blob back after `Submit` and only then prints the height and commitment, but this environment has no faucet TIA, so that round trip was not run. `npm run post` on an unfunded key stops before broadcasting.
 
 ## Layout
 
@@ -216,7 +234,9 @@ src/preflight-cli.ts  read-only go/no-go
 src/houston.ts        402 quote, deposit helpers, Payment-Signature
 src/trace.ts          redacted live HTTP trace
 src/receipts.ts       hash-chained JSONL
-src/celestia.ts       Mocha blob submit and get
+celestia/             Go helper: celestia-node client, public Mocha endpoints
+src/mocha.ts          spawns the helper for post and verify
+src/celestia.ts       namespace, payload bytes, optional light-node JSON-RPC
 src/stripe.ts         Checkout and the webhook
 src/run.ts            wires the demo together
 ```

@@ -44,9 +44,15 @@ describe("demo", () => {
     assert.match(receipts, /"type":"human"/);
     assert.match(receipts, /"dryRun":true/);
     assert.match(receipts, /"tiaCharged":null/);
-    const notes = await verifyReceipts(env, async () => {
-      throw new Error("verify should not call Mocha for a mock post");
-    });
+    const notes = await verifyReceipts(
+      env,
+      async () => {
+        throw new Error("verify should not call Mocha for a mock post");
+      },
+      async () => {
+        throw new Error("verify should not spawn the Mocha helper for a mock post");
+      },
+    );
     assert.match(notes.join("\n"), /mock/);
     assert.match(notes.join("\n"), /not revenue/);
     assert.equal(existsSync(env.TRACE_DIR), false);

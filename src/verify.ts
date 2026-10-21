@@ -1,8 +1,13 @@
-import { blobPayload, fetchReceiptBlob, localPostMatches, mochaReadHint, readPostLog } from "./celestia.ts";
+import { blobPayload, fetchReceiptBlob, localPostMatches, readPostLog } from "./celestia.ts";
 import { loadConfig } from "./config.ts";
+import { readReceiptBlob, runMochaHelper, type HelperRun } from "./mocha.ts";
 import { readReceiptLines, verifyHashChain } from "./receipts.ts";
 
-export async function verifyReceipts(env = process.env, fetchImpl: typeof fetch = fetch): Promise<string[]> {
+export async function verifyReceipts(
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl: typeof fetch = fetch,
+  run: HelperRun = runMochaHelper,
+): Promise<string[]> {
   const cfg = loadConfig(env);
   const lines = readReceiptLines(cfg.receiptsPath);
   verifyHashChain(lines);
@@ -23,17 +28,16 @@ export async function verifyReceipts(env = process.env, fetchImpl: typeof fetch 
       );
       continue;
     }
-    if (!cfg.celestiaRpc) {
-      throw new Error(`Post ${index + 1} is a real Mocha blob at height ${post.height}, but CELESTIA_RPC_URL is unset. ${mochaReadHint()}`);
-    }
-    const data = await fetchReceiptBlob({
-      rpcUrl: cfg.celestiaRpc,
-      token: cfg.celestiaToken,
-      namespaceId: cfg.namespaceId,
-      height: post.height,
-      commitment: post.commitment,
-      fetchImpl,
-    });
+    const data = cfg.celestiaRpc
+      ? await fetchReceiptBlob({
+          rpcUrl: cfg.celestiaRpc,
+          token: cfg.celestiaToken,
+          namespaceId: cfg.namespaceId,
+          height: post.height,
+          commitment: post.commitment,
+          fetchImpl,
+        })
+      : await readReceiptBlob(cfg, post.height, post.commitment, run);
     const expected = Buffer.from(blobPayload(lines.slice(post.lineStart, post.lineEnd)));
     if (!data.equals(expected)) {
       throw new Error(`Post ${index + 1} blob at height ${post.height} does not match the local receipt lines`);

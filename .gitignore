@@ -4,3 +4,5 @@ receipts.jsonl
 posts.json
 traces/
 *.log
+celestia-keys/
+celestia/mocha-helper
