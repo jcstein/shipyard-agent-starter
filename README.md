@@ -40,6 +40,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 
 | Command | What it does |
 | --- | --- |
+| `npm run preflight` | Reads the Eden address, TIA balance, and a fresh 402. Prints go or no-go. Does not sign or broadcast. |
 | `npm run demo` | Dry-run by default. `DEMO_MODE=live` pays for one completion. |
 | `npm run verify` | Checks the hash chain. Fetches a real Mocha blob when one was posted. |
 | `npm run post` | Submits unposted receipt lines to your celestia-node. |
@@ -59,7 +60,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 2. `POST /v1/deposit/build` with `{ "from", "accepted" }` where `accepted` is the quote entry. The helper returns an unsigned Eden transaction. This client signs it only when `to` is the pinned escrow, `value` equals the quote, and the calldata is `deposit(bytes32 paymentId, address payTo, address facilitator, uint256 expiresAt, uint256 refundAfter, uint256 tiaPriceUsd)` for those same fields.
 3. Signs that transaction locally and `POST /v1/deposit/send` with `{ "signedTx", "paymentId" }`.
 4. Polls `GET /v1/deposit/status/:txHash` until `confirmed`.
-5. Signs an EIP-191 `Payment-Signature` and retries the chat request.
+5. Signs an EIP-191 `Payment-Signature` and retries the chat request. The default signs the nonce bytes. `HOUSTON_SIGN_FIELD=paymentId` signs the payment id instead. With `HOUSTON_RETRY_OTHER_SIGN_FIELD=1`, a rejection that says the signature is invalid retries the chat completion once with the other field. That retry does not send a second deposit. The paid retry has not been confirmed against the live API.
 
 The header is base64 JSON:
 
@@ -72,7 +73,7 @@ The header is base64 JSON:
 }
 ```
 
-`signature` is `personal_sign` of the raw nonce bytes (the same EIP-191 shape the facilitator uses for `paymentId`). Set `HOUSTON_SIGN_FIELD=paymentId` to sign the payment id instead. The paid retry has not been confirmed against the live API. See the status section below.
+`signature` is `personal_sign` of the raw nonce bytes by default. The facilitator's `serverSignature` is EIP-191 over the raw paymentId bytes; signing the nonce is the same shape, not a confirmed client rule. Set `HOUSTON_SIGN_FIELD=paymentId` to sign the payment id instead. The paid retry has not been confirmed against the live API. See [First funded run](#first-funded-run).
 
 NativeEscrow is `0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8` on Eden. The client will not sign a deposit aimed at any other contract. Explorer: [eden.blockscout.com](https://eden.blockscout.com/address/0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8).
 
@@ -84,7 +85,7 @@ The quote amount is a **ceiling**. `upto` means the facilitator can settle less 
 
 `SPEND_CAP_TIA` (default `0.05`) is enforced here, before a transaction is signed. It is not a hint to the model. The cap is the sum of live quotes already deposited plus this quote (and, on the live path, the deposit's max gas). Dry-run lines are not counted. An optional `SPEND_CAP_USD` compares the quote against the TIA/USD price inside the 402. The £100 hackathon budget is not a balance this process holds.
 
-The private key is read from `EDEN_PRIVATE_KEY` and used only to sign. It is never written to a receipt, a blob, or the chat prompt. Receipts store `sha256` of the payment header, not the signature.
+The private key is read from `EDEN_PRIVATE_KEY` and used only to derive the address and to sign. It is never written to a receipt, a blob, the chat prompt, or a live trace. Receipts store `sha256` of the payment header, not the signature. A live trace does store the signed deposit transaction and the `Payment-Signature` header.
 
 ## Receipts
 
@@ -105,7 +106,10 @@ See `.env.example`. The ones that matter:
 | `SPEND_CAP_TIA` | Cap in TIA. Default `0.05`. |
 | `HOUSTON_BASE_URL` | Default `https://inference.bot.fun/v1` |
 | `HOUSTON_MODEL` | Default `qwen/qwen-flash` |
-| `HOUSTON_SIGN_FIELD` | `nonce` (default) or `paymentId` |
+| `HOUSTON_SIGN_FIELD` | `nonce` (default) or `paymentId`. Unconfirmed against the live API. |
+| `HOUSTON_RETRY_OTHER_SIGN_FIELD` | `1` retries an invalid-signature rejection once on the same paymentId. Unset does not. |
+| `EDEN_RPC_URL` | Balance RPC for preflight. Default `https://rpc.eden.gateway.fm/` |
+| `TRACE_DIR` | Live HTTP traces. Default `traces/`. Gitignored. |
 | `ESCROW_ADDRESS` | Pinned NativeEscrow |
 | `CELESTIA_RPC_URL` | celestia-node RPC, usually `http://127.0.0.1:26658` |
 | `CELESTIA_AUTH_TOKEN` | Bearer token from the node |
@@ -122,7 +126,31 @@ Eden gas and the escrow deposit are real TIA on chain 714. Follow the bot.fun do
 - [Fund Houston with TIA](https://bot.fun/docs/fund-houston)
 - [bot.fun/deposit](https://bot.fun/deposit) to generate a Celestia deposit address for an Eden `0x` recipient, or the Bridge tab on that page
 
-Put that Eden address's key in `EDEN_PRIVATE_KEY`. This starter does not custody it.
+Put that Eden address's key in `EDEN_PRIVATE_KEY`. This starter does not custody it. `npm run preflight` prints the address it will use.
+
+## First funded run
+
+Dry-run stays the default. The paid retry is still unconfirmed. This is the path for the first funded key. It does not decide which bytes `Payment-Signature` must cover.
+
+1. Fund the Eden address, not a Mocha faucet address. `npm run preflight` prints the address derived from `EDEN_PRIVATE_KEY`. Send a small amount of real TIA on Eden (chain 714) to it. Use [bot.fun/deposit](https://bot.fun/deposit) (Deposit Address for that `0x` recipient) or the Bridge tab. See [What is Eden?](https://bot.fun/docs/eden) and [Fund Houston with TIA](https://bot.fun/docs/fund-houston).
+
+2. Preflight. It reads the balance from `https://rpc.eden.gateway.fm/` and a fresh 402. When the quote checks out it POSTs `deposit/build` and takes max gas as `gasLimit * maxFeePerGas`, the same figure a live run caps against. It does not sign, and it does not call `deposit/send`. If the address cannot cover the deposit and gas, `deposit/build` returns 402 `insufficient balance for escrow deposit and gas` and preflight is `NO-GO`. The preflight quote is thrown away. The live run asks for its own. On the 21 Oct 2026 capture, `expiresAt` was five minutes after the 402 and `refundAfter` was seven days after it, so start the live command while you are at the keyboard. `GO` exits 0. `NO-GO` exits 1.
+
+```bash
+npm run preflight
+```
+
+3. Live run, with the cap left low. `HOUSTON_RETRY_OTHER_SIGN_FIELD=1` is the explicit switch for one extra chat completion if Houston rejects the signature. It signs the other of `nonce` and `paymentId` for the paymentId that was just deposited. It does not deposit again. Leave `HOUSTON_SIGN_FIELD` at `nonce` unless you mean to try `paymentId` first.
+
+```bash
+DEMO_MODE=live HOUSTON_RETRY_OTHER_SIGN_FIELD=1 SPEND_CAP_TIA=0.05 npm run demo
+```
+
+4. The trace is `traces/<timestamp>.json` (gitignored). It has the 402 response headers, including the raw `payment-required` base64, the `deposit/build` body, the `deposit/send` request and response bodies, and the paid retry request headers plus the response status, body, and headers, including `payment-response` when one is present. The private key is not in the file. The signed transaction and `Payment-Signature` are. Do not commit it.
+
+5. Send that trace back. Do not send `.env`. The file is the vector for both open questions: which field the client signature has to cover, and what `deposit/send` returns when a broadcast is accepted. If the retry flag was set and the first signature was rejected, both attempts are in the trace.
+
+If the flag was unset and the paid retry is rejected, stop. The error names the deposit transaction, the paymentId, and `refundAfter`. Do not start another live run to reuse that paymentId. A new run requests a new quote and would deposit again. NativeEscrow reverts a second `deposit` for a paymentId that was already used. The TIA stays in escrow until the facilitator settles it, or until `refundAfter`, when the buyer can call `refundExpired(paymentId)` on the escrow. Anyone can submit that call. The refund goes to the buyer. The quote amount is a ceiling, not a settled charge.
 
 Mocha faucet TIA is only for posting blobs from a light node. It does not pay Houston Inference. The faucet is documented on the [Mocha testnet](https://docs.celestia.org/operate/networks/mocha-testnet/) page: [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet), and the `#mocha-faucet` Discord command. Using it does not entitle anyone to a mainnet airdrop.
 
@@ -168,13 +196,14 @@ Exercised against live services while building this starter:
 - `POST /v1/deposit/build` with `{ from, accepted }`. A public Eden address that already held TIA was used only to read the unsigned transaction JSON. That transaction was not signed or broadcast.
 - `POST /v1/deposit/send` rejects a body without `paymentId`, and a bogus signed transaction returns `failed to broadcast transaction`. The success body was not observed.
 - `GET /v1/deposit/status/:txHash` returns `pending` for an unknown hash and `confirmed` for a hash that is already on Eden.
+- `eth_chainId` on `https://rpc.eden.gateway.fm/` returns `0x2ca` (714). Preflight uses that RPC for the balance and refuses any other chain id.
 - Public Mocha RPC `header.NetworkHead` reports `chain_id` `mocha-5`. `blob.Get`, `blob.GetAll`, and `blob.Submit` accept the parameter shapes this client sends. No blob was submitted.
 
 Not exercised, because there is no funded key in this environment:
 
 - Signing and broadcasting a NativeEscrow deposit.
 - The `deposit/send` success payload.
-- A `Payment-Signature` accepted by Houston after a deposit. The client signs the nonce bytes. If a funded retry is rejected as a bad signature, set `HOUSTON_SIGN_FIELD=paymentId` and request a new quote. Do not reuse a payment id.
+- A `Payment-Signature` accepted by Houston after a deposit. The client signs the nonce bytes unless `HOUSTON_SIGN_FIELD=paymentId`. If that retry is rejected as an invalid signature and `HOUSTON_RETRY_OTHER_SIGN_FIELD=1`, the process tries the other field once on the same paymentId and does not deposit again. Whether either field is accepted is unconfirmed. Do not deposit the same paymentId twice.
 - Token counts and the settled TIA amount on a real completion (`payment-response`).
 - A Stripe API call. Webhook signature checks are unit-tested with a local secret.
 - A Mocha round trip of this app's blob. `npm run post` is untested against a funded light node.
@@ -182,12 +211,14 @@ Not exercised, because there is no funded key in this environment:
 ## Layout
 
 ```
-src/demo.ts        dry-run or live entry
-src/houston.ts     402 quote, deposit helpers, Payment-Signature
-src/receipts.ts    hash-chained JSONL
-src/celestia.ts    Mocha blob submit and get
-src/stripe.ts      Checkout and the webhook
-src/run.ts         wires the demo together
+src/demo.ts           dry-run or live entry
+src/preflight-cli.ts  read-only go/no-go
+src/houston.ts        402 quote, deposit helpers, Payment-Signature
+src/trace.ts          redacted live HTTP trace
+src/receipts.ts       hash-chained JSONL
+src/celestia.ts       Mocha blob submit and get
+src/stripe.ts         Checkout and the webhook
+src/run.ts            wires the demo together
 ```
 
 Keep the diff small. The model does not get the key, and the cap does not live inside the prompt.

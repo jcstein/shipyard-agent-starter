@@ -4,6 +4,7 @@ import { assertPrivateKey } from "./config.ts";
 import { EDEN_CHAIN_ID, EDEN_NETWORK, EXPLORER } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { assertWithinCap, formatTia, formatUsd, quoteUsd } from "./money.ts";
+import { isTraceFetch } from "./trace.ts";
 
 export type ChatMessage = { role: "user" | "system" | "assistant"; content: string };
 
@@ -66,6 +67,17 @@ export class PaidRequestError extends Error {
     super(message);
     this.name = "PaidRequestError";
     this.depositTxHash = depositTxHash;
+  }
+}
+
+export class InferenceHttpError extends Error {
+  status: number;
+  body: unknown;
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = "InferenceHttpError";
+    this.status = status;
+    this.body = body;
   }
 }
 
@@ -184,10 +196,74 @@ export function encodePaymentSignature(quote: ParsedQuote, signature: string): s
   return Buffer.from(JSON.stringify(body)).toString("base64");
 }
 
+export function otherSignField(field: SignField): SignField {
+  return field === "nonce" ? "paymentId" : "nonce";
+}
+
+/**
+ * True when a response is a rejected signature, not a missing Payment-Signature header.
+ * "invalid signature" and "signature verification failed" match. "header is required" does not.
+ */
+export function explainsInvalidSignature(...parts: unknown[]): boolean {
+  const texts: string[] = [];
+  const visit = (value: unknown) => {
+    if (typeof value === "string") texts.push(value);
+    else if (isRecord(value)) {
+      if (typeof value.message === "string") texts.push(value.message);
+      if (typeof value.error === "string") texts.push(value.error);
+      else if (value.error !== undefined) visit(value.error);
+    }
+  };
+  for (const part of parts) visit(part);
+  const text = texts.join("\n").toLowerCase();
+  if (!text.includes("signature")) return false;
+  const missingHeader = /header is required|missing payment-signature|no payment-signature/.test(text);
+  const rejected = /invalid|malformed|bad|wrong|mismatch|fail|recover|reject|not valid|unable to/.test(text);
+  if (missingHeader && !rejected) return false;
+  return rejected;
+}
+
 export async function signPayment(privateKey: string, quote: ParsedQuote, field: SignField): Promise<string> {
   const wallet = new Wallet(assertPrivateKey(privateKey));
   const hex = field === "paymentId" ? quote.accepted.extra.paymentId : quote.accepted.extra.nonce;
   return wallet.signMessage(getBytes(hex));
+}
+
+export function paymentRejectionInstructions(input: {
+  quote: ParsedQuote;
+  depositTxHash: string;
+  tried: SignField;
+  invalidSignature: boolean;
+  retriedOther: boolean;
+  detail: string;
+}): string {
+  const other = otherSignField(input.tried);
+  const refundAt = new Date(input.quote.accepted.extra.refundAfter * 1000).toISOString();
+  const paymentId = input.quote.accepted.extra.paymentId;
+  const escrow = input.quote.accepted.extra.escrowContract;
+  const lines = [
+    input.detail,
+    `The deposit ${input.depositTxHash} is already in NativeEscrow for paymentId ${paymentId}.`,
+    `A second deposit for this paymentId reverts on-chain ("payment id already used"). Do not start another live run to reuse it. A new live run requests a new quote and would deposit again.`,
+    `This attempt signed ${input.tried}.`,
+  ];
+  if (input.invalidSignature && input.retriedOther) {
+    lines.push(
+      `Retried the chat completion once with ${other} on that same paymentId. No second deposit. Both signatures were rejected.`,
+    );
+  } else if (input.invalidSignature) {
+    lines.push(
+      `The other field (${other}) was not sent. Set HOUSTON_RETRY_OTHER_SIGN_FIELD=1 before the live run so a signature rejection retries the chat completion once on the same deposit. This process will not deposit that paymentId again.`,
+    );
+  } else {
+    lines.push(
+      "The response was not classified as an invalid signature, so the other sign field was not tried. Inspect the trace before doing anything else.",
+    );
+  }
+  lines.push(
+    `The TIA stays in escrow until the facilitator settles it, or until refundAfter ${refundAt}, when the buyer can call refundExpired(paymentId) on ${escrow}. Anyone can submit that call; the refund goes to the buyer. The quote amount is a ceiling, not a settled charge.`,
+  );
+  return lines.join(" ");
 }
 
 export function paymentHeaderSha256(header: string): string {
@@ -245,10 +321,12 @@ export async function fetchQuote(input: {
   escrow: string;
   fetchImpl?: typeof fetch;
   paymentSignature?: string;
+  step?: string;
 }): Promise<ParsedQuote | { kind: "completion"; completion: Completion; paymentResponse: string | null }> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (input.paymentSignature) headers["payment-signature"] = input.paymentSignature;
+  if (input.step && isTraceFetch(fetchImpl)) headers["x-shipyard-trace-step"] = input.step;
   const res = await fetchImpl(`${input.baseUrl}/chat/completions`, {
     method: "POST",
     headers,
@@ -258,11 +336,11 @@ export async function fetchQuote(input: {
   const body = await readJson(res);
   if (res.status === 402) {
     const header = res.headers.get("payment-required");
-    if (!header) throw new Error("402 response had no payment-required header");
+    if (!header) throw new InferenceHttpError("402 response had no payment-required header", 402, body);
     return parsePaymentRequired(header, body, input.escrow);
   }
   if (!res.ok) {
-    throw new Error(`inference ${res.status}: ${errorMessage(body, "request failed")}`);
+    throw new InferenceHttpError(`inference ${res.status}: ${errorMessage(body, "request failed")}`, res.status, body);
   }
   return {
     kind: "completion",
@@ -308,6 +386,22 @@ export function assertDepositTx(tx: TxData, quote: ParsedQuote, escrow: string):
   if (decoded.tiaPriceUsd !== BigInt(extra.tiaPriceUsd)) throw new Error("deposit calldata tiaPriceUsd does not match the quote");
 }
 
+export function maxGasWei(tx: TxData): bigint {
+  return asWei("gasLimit", tx.gasLimit) * asWei("maxFeePerGas", tx.maxFeePerGas);
+}
+
+export function readDepositBuild(status: number, json: unknown, quote: ParsedQuote, escrow: string): TxData {
+  if (status !== 200 || !isRecord(json) || !isRecord(json.txData)) {
+    throw new Error(`deposit/build failed (${status}): ${errorMessage(json, "no unsigned transaction")}`);
+  }
+  if (json.paymentId !== quote.accepted.extra.paymentId) {
+    throw new Error("deposit/build paymentId does not match the quote");
+  }
+  const tx = json.txData as TxData;
+  assertDepositTx(tx, quote, escrow);
+  return tx;
+}
+
 function asWei(label: string, value: string | number): bigint {
   const text = String(value);
   if (!/^\d+$/.test(text)) throw new Error(`${label} is not an integer: ${text}`);
@@ -328,14 +422,38 @@ function readTxHash(body: unknown): string {
   return hash;
 }
 
-async function postJson(fetchImpl: typeof fetch, url: string, body: unknown): Promise<{ status: number; json: unknown }> {
+async function postJson(
+  fetchImpl: typeof fetch,
+  url: string,
+  body: unknown,
+  step?: string,
+): Promise<{ status: number; json: unknown }> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (step && isTraceFetch(fetchImpl)) headers["x-shipyard-trace-step"] = step;
   const res = await fetchImpl(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
   return { status: res.status, json: await readJson(res) };
+}
+
+export async function requestDepositBuild(input: {
+  baseUrl: string;
+  from: string;
+  quote: ParsedQuote;
+  escrow: string;
+  fetchImpl?: typeof fetch;
+}): Promise<TxData> {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  const built = await postJson(
+    fetchImpl,
+    `${input.baseUrl}/deposit/build`,
+    { from: input.from, accepted: input.quote.accepted },
+    "deposit-build",
+  );
+  return readDepositBuild(built.status, built.json, input.quote, input.escrow);
 }
 
 export async function payAndComplete(input: {
@@ -350,8 +468,10 @@ export async function payAndComplete(input: {
   paymentHeader: string;
   paymentResponse: string | null;
   tiaCharged: string | null;
+  signFieldUsed: SignField;
 }> {
   if (!input.cfg.privateKey) throw new Error("EDEN_PRIVATE_KEY is required");
+  const privateKey = input.cfg.privateKey;
   const fetchImpl = input.fetchImpl ?? fetch;
   assertQuoteFresh(input.quote);
   const quoted = asWei("quote amount", input.quote.accepted.amount);
@@ -363,19 +483,15 @@ export async function payAndComplete(input: {
   });
   assertQuoteUsd(input.quote, input.cfg.spendCapUsdWei);
 
-  const built = await postJson(fetchImpl, `${input.cfg.houstonBase}/deposit/build`, {
-    from: new Wallet(assertPrivateKey(input.cfg.privateKey)).address,
-    accepted: input.quote.accepted,
+  const from = new Wallet(assertPrivateKey(privateKey)).address;
+  const tx = await requestDepositBuild({
+    baseUrl: input.cfg.houstonBase,
+    from,
+    quote: input.quote,
+    escrow: input.cfg.escrow,
+    fetchImpl,
   });
-  if (built.status !== 200 || !isRecord(built.json) || !isRecord(built.json.txData)) {
-    throw new Error(`deposit/build failed (${built.status}): ${errorMessage(built.json, "no unsigned transaction")}`);
-  }
-  const tx = built.json.txData as TxData;
-  if (built.json.paymentId !== input.quote.accepted.extra.paymentId) {
-    throw new Error("deposit/build paymentId does not match the quote");
-  }
-  assertDepositTx(tx, input.quote, input.cfg.escrow);
-  const gas = asWei("gasLimit", tx.gasLimit) * asWei("maxFeePerGas", tx.maxFeePerGas);
+  const gas = maxGasWei(tx);
   assertWithinCap({
     capWei: input.cfg.spendCapWei,
     committedWei: input.committedWei,
@@ -383,7 +499,7 @@ export async function payAndComplete(input: {
     label: "deposit plus gas",
   });
 
-  const signedTx = await new Wallet(assertPrivateKey(input.cfg.privateKey)).signTransaction({
+  const signedTx = await new Wallet(assertPrivateKey(privateKey)).signTransaction({
     type: 2,
     chainId: tx.chainId,
     to: tx.to,
@@ -395,44 +511,130 @@ export async function payAndComplete(input: {
     maxPriorityFeePerGas: asWei("maxPriorityFeePerGas", tx.maxPriorityFeePerGas),
   });
 
-  const sent = await postJson(fetchImpl, `${input.cfg.houstonBase}/deposit/send`, {
-    signedTx,
-    paymentId: input.quote.accepted.extra.paymentId,
-  });
+  const sent = await postJson(
+    fetchImpl,
+    `${input.cfg.houstonBase}/deposit/send`,
+    { signedTx, paymentId: input.quote.accepted.extra.paymentId },
+    "deposit-send",
+  );
   if (sent.status !== 200) {
     throw new PaidRequestError(
       `deposit/send failed (${sent.status}): ${errorMessage(sent.json, "broadcast failed")}`,
       null,
     );
   }
-  const depositTxHash = readTxHash(sent.json);
+  let depositTxHash: string;
+  try {
+    depositTxHash = readTxHash(sent.json);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new PaidRequestError(
+      `${message} deposit/send returned HTTP ${sent.status}. If the explorer shows the transaction, do not deposit this paymentId again. The response body is in the trace.`,
+      null,
+    );
+  }
   await waitForDeposit(input.cfg.houstonBase, depositTxHash, fetchImpl);
 
-  const signature = await signPayment(input.cfg.privateKey, input.quote, input.cfg.signField);
-  const paymentHeader = encodePaymentSignature(input.quote, signature);
-  const retry = await fetchQuote({
-    baseUrl: input.cfg.houstonBase,
-    model: input.cfg.model,
-    messages: input.messages,
-    maxTokens: input.cfg.maxTokens,
-    escrow: input.cfg.escrow,
-    fetchImpl,
-    paymentSignature: paymentHeader,
-  });
-  if (isQuote(retry)) {
-    const message = errorMessage(retry.body, "payment was not accepted");
+  const attempt = async (field: SignField, step: string) => {
+    const signature = await signPayment(privateKey, input.quote, field);
+    const paymentHeader = encodePaymentSignature(input.quote, signature);
+    try {
+      const result = await fetchQuote({
+        baseUrl: input.cfg.houstonBase,
+        model: input.cfg.model,
+        messages: input.messages,
+        maxTokens: input.cfg.maxTokens,
+        escrow: input.cfg.escrow,
+        fetchImpl,
+        paymentSignature: paymentHeader,
+        step,
+      });
+      return { field, paymentHeader, result, error: null as InferenceHttpError | null };
+    } catch (error) {
+      if (error instanceof InferenceHttpError) return { field, paymentHeader, result: null, error };
+      throw error;
+    }
+  };
+
+  const classify = (paid: Awaited<ReturnType<typeof attempt>>) => {
+    if (paid.result && !isQuote(paid.result)) {
+      return { ok: true as const, completion: paid.result.completion, paymentResponse: paid.result.paymentResponse };
+    }
+    if (paid.result && isQuote(paid.result)) {
+      return {
+        ok: false as const,
+        invalidSignature:
+          explainsInvalidSignature(paid.result.body) || explainsInvalidSignature(paid.result.required.error),
+        detail: errorMessage(paid.result.body, paid.result.required.error ?? "payment was not accepted"),
+      };
+    }
+    const status = paid.error?.status ?? 0;
+    return {
+      ok: false as const,
+      invalidSignature: (status === 400 || status === 402) && explainsInvalidSignature(paid.error?.body),
+      detail: paid.error?.message ?? "payment was not accepted",
+    };
+  };
+
+  try {
+    const firstField = input.cfg.signField;
+    const first = await attempt(firstField, `paid-retry:${firstField}`);
+    const firstClass = classify(first);
+    if (firstClass.ok) {
+      return {
+        completion: firstClass.completion,
+        depositTxHash,
+        paymentHeader: first.paymentHeader,
+        paymentResponse: firstClass.paymentResponse,
+        tiaCharged: settledAmount(firstClass.paymentResponse),
+        signFieldUsed: firstField,
+      };
+    }
+
+    let retriedOther = false;
+    let detail = firstClass.detail;
+    let invalidSignature = firstClass.invalidSignature;
+    if (firstClass.invalidSignature && input.cfg.retryOtherSignField) {
+      const other = otherSignField(firstField);
+      retriedOther = true;
+      console.log(
+        `Paid retry rejected the ${firstField} signature (${firstClass.detail}). Retrying once with ${other} on paymentId ${input.quote.accepted.extra.paymentId}. No second deposit.`,
+      );
+      const second = await attempt(other, `paid-retry-other-sign-field:${other}`);
+      const secondClass = classify(second);
+      if (secondClass.ok) {
+        return {
+          completion: secondClass.completion,
+          depositTxHash,
+          paymentHeader: second.paymentHeader,
+          paymentResponse: secondClass.paymentResponse,
+          tiaCharged: settledAmount(secondClass.paymentResponse),
+          signFieldUsed: other,
+        };
+      }
+      detail = `${firstClass.detail} Then ${other}: ${secondClass.detail}`;
+      invalidSignature = true;
+    }
+
     throw new PaidRequestError(
-      `${message}. The deposit is ${depositTxHash}. If this is an invalid signature, set HOUSTON_SIGN_FIELD to the other of nonce|paymentId and use a fresh quote. Do not reuse this paymentId.`,
+      paymentRejectionInstructions({
+        quote: input.quote,
+        depositTxHash,
+        tried: firstField,
+        invalidSignature,
+        retriedOther,
+        detail,
+      }),
+      depositTxHash,
+    );
+  } catch (error) {
+    if (error instanceof PaidRequestError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new PaidRequestError(
+      `${message} The deposit is ${depositTxHash}. Do not deposit this paymentId again.`,
       depositTxHash,
     );
   }
-  return {
-    completion: retry.completion,
-    depositTxHash,
-    paymentHeader,
-    paymentResponse: retry.paymentResponse,
-    tiaCharged: settledAmount(retry.paymentResponse),
-  };
 }
 
 export function settledAmount(header: string | null): string | null {
@@ -450,7 +652,9 @@ export async function waitForDeposit(baseUrl: string, txHash: string, fetchImpl:
   const deadline = Date.now() + 45_000;
   let last = "unknown";
   while (Date.now() < deadline) {
-    const res = await fetchImpl(`${baseUrl}/deposit/status/${txHash}`, { signal: AbortSignal.timeout(15_000) });
+    const headers: Record<string, string> = {};
+    if (isTraceFetch(fetchImpl)) headers["x-shipyard-trace-step"] = "deposit-status";
+    const res = await fetchImpl(`${baseUrl}/deposit/status/${txHash}`, { headers, signal: AbortSignal.timeout(15_000) });
     const body = await readJson(res);
     if (!res.ok || !isRecord(body) || typeof body.status !== "string") {
       throw new PaidRequestError(`deposit status failed: ${errorMessage(body, res.statusText)}`, txHash);

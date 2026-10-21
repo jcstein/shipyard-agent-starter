@@ -1,4 +1,4 @@
-import { APP_NAMESPACE_ID, HOUSTON_INFERENCE, NATIVE_ESCROW } from "./eden.ts";
+import { APP_NAMESPACE_ID, EDEN_RPC_URL, HOUSTON_INFERENCE, NATIVE_ESCROW } from "./eden.ts";
 import { parseTia, parseUsd } from "./money.ts";
 
 export type SignField = "nonce" | "paymentId";
@@ -13,7 +13,11 @@ export type Config = {
   model: string;
   maxTokens: number;
   signField: SignField;
+  /** When a deposited payment is rejected as an invalid signature, retry the chat completion once with the other field. Never deposits again. */
+  retryOtherSignField: boolean;
   escrow: string;
+  edenRpc: string;
+  tracesDir: string;
   celestiaRpc: string | null;
   celestiaToken: string | null;
   namespaceId: string;
@@ -36,6 +40,8 @@ function blankToNull(value: string | undefined): string | null {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const mode: DemoMode = env.DEMO_MODE === "live" ? "live" : "dry-run";
   const signField: SignField = env.HOUSTON_SIGN_FIELD === "paymentId" ? "paymentId" : "nonce";
+  const retryFlag = env.HOUSTON_RETRY_OTHER_SIGN_FIELD?.trim().toLowerCase() ?? "";
+  const retryOtherSignField = retryFlag === "1" || retryFlag === "true" || retryFlag === "yes";
   const maxTokens = Number(env.HOUSTON_MAX_TOKENS ?? "32");
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4096) {
     throw new Error("HOUSTON_MAX_TOKENS must be an integer from 1 to 4096");
@@ -58,7 +64,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     model: env.HOUSTON_MODEL?.trim() || "qwen/qwen-flash",
     maxTokens,
     signField,
+    retryOtherSignField,
     escrow: env.ESCROW_ADDRESS?.trim() || NATIVE_ESCROW,
+    edenRpc: env.EDEN_RPC_URL?.trim() || EDEN_RPC_URL,
+    tracesDir: env.TRACE_DIR?.trim() || "traces",
     celestiaRpc: blankToNull(env.CELESTIA_RPC_URL),
     celestiaToken: blankToNull(env.CELESTIA_AUTH_TOKEN),
     namespaceId,

@@ -1,0 +1,28 @@
+{
+    "x402Version": 2,
+    "error": "Payment-Signature header is required",
+    "resource": {
+        "url": "http://inference.bot.fun/v1/chat/completions",
+        "mimeType": "application/json"
+    },
+    "accepts": [
+        {
+            "scheme": "escrow-upto",
+            "network": "eip155:714",
+            "asset": "native",
+            "amount": "4085087032311",
+            "payTo": "0xC5AaA301b580d31e64B3bf546846586D934416dC",
+            "extra": {
+                "paymentId": "0x4c5f005c7104d839ab9d47d14652fd60c71d9d6b39b86dc597fa35487d1993ca",
+                "escrowContract": "0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8",
+                "facilitator": "0xEC7557EA26e646020B3C6c90F8Af6Fbf73460f45",
+                "refundAfter": 1793203285,
+                "expiresAt": 1792598785,
+                "nonce": "0x3990269a82aba35a7ccdb3906d36eddc38f76e4cc32bbcf5a857fb7f85a75a82",
+                "chainId": 714,
+                "tiaPriceUsd": "633328000000000000",
+                "serverSignature": "0xaa002988db5a9246b04339c7ce91529449fc29c81d503bc565841e1795bd94e96f795f1fecfda21364f76e20c962cf3e7494258f5ab0d4c46455adba3aa126e701"
+            }
+        }
+    ]
+}

@@ -2,4 +2,5 @@ node_modules/
 .env
 receipts.jsonl
 posts.json
+traces/
 *.log

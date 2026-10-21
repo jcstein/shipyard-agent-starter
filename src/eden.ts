@@ -1,6 +1,7 @@
 /** Eden mainnet, Celestia's native EVM chain. Gas and escrow deposits are real TIA. */
 export const EDEN_CHAIN_ID = 714;
 export const EDEN_NETWORK = "eip155:714";
+/** Public Eden RPC. `eth_chainId` returns 0x2ca (714). */
 export const EDEN_RPC_URL = "https://rpc.eden.gateway.fm/";
 export const NATIVE_ESCROW = "0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8";
 export const EXPLORER = "https://eden.blockscout.com";

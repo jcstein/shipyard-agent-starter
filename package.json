@@ -9,6 +9,7 @@
   },
   "scripts": {
     "demo": "node --env-file-if-exists=.env src/demo.ts",
+    "preflight": "node --env-file-if-exists=.env src/preflight-cli.ts",
     "verify": "node --env-file-if-exists=.env src/verify.ts",
     "post": "node --env-file-if-exists=.env src/post.ts",
     "checkout": "node --env-file-if-exists=.env src/checkout.ts",
