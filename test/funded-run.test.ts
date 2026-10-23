@@ -187,6 +187,8 @@ describe("preflight", () => {
     const text = formatPreflight(report);
     assert.match(text, /^GO/);
     assert.match(text, /was not signed/);
+    assert.match(text, /Suggested live command: DEMO_MODE=live npm run demo$/m);
+    assert.equal(text.includes("HOUSTON_RETRY_OTHER_SIGN_FIELD"), false);
     assert.equal(text.includes(wallet.privateKey), false);
     assert.equal(text.includes(wallet.privateKey.slice(2)), false);
   });

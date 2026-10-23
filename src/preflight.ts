@@ -232,7 +232,7 @@ export function formatPreflight(report: PreflightReport): string {
   if (report.ok) {
     lines.push("Balance covers deposit + gas, and that total fits the spend cap.");
     lines.push("This quote was not deposited. A live run requests a new 402. Start it promptly.");
-    lines.push("Suggested live command: DEMO_MODE=live HOUSTON_RETRY_OTHER_SIGN_FIELD=1 npm run demo");
+    lines.push("Suggested live command: DEMO_MODE=live npm run demo");
   } else {
     lines.push("Reasons:");
     for (const reason of report.reasons) lines.push(`- ${reason}`);

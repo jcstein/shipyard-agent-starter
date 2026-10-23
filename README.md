@@ -160,7 +160,7 @@ npm run preflight
 3. Live run, with the cap left low. Leave `HOUSTON_SIGN_FIELD` unset or set it to `paymentId`. `HOUSTON_RETRY_OTHER_SIGN_FIELD=1` is optional: if Houston rejects the paymentId signature, the process signs the nonce once for the paymentId that was just deposited. It does not deposit again. Do not set `HOUSTON_SIGN_FIELD=nonce` for a normal run.
 
 ```bash
-DEMO_MODE=live SPEND_CAP_TIA=0.05 npm run demo
+DEMO_MODE=live npm run demo
 ```
 
 4. The trace is `traces/<timestamp>.json` (gitignored). It has the 402 response headers, including the raw `payment-required` base64, the `deposit/build` body, the `deposit/send` request and response bodies (including `deprecation` when Houston sends it), the deposit status body, and the paid retry request headers plus the response status, body, and headers, including `payment-response`. The private key is not in the file. The signed transaction and `Payment-Signature` are. Do not commit it.
