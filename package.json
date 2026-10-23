@@ -9,8 +9,12 @@
   },
   "scripts": {
     "demo": "node --env-file-if-exists=.env src/demo.ts",
+    "preflight": "node --env-file-if-exists=.env src/preflight-cli.ts",
     "verify": "node --env-file-if-exists=.env src/verify.ts",
     "post": "node --env-file-if-exists=.env src/post.ts",
+    "celestia:build": "cd celestia && GOTOOLCHAIN=go1.25.1 go build -o mocha-helper .",
+    "celestia:address": "node --env-file-if-exists=.env src/celestia-cmd.ts address",
+    "celestia:head": "node --env-file-if-exists=.env src/celestia-cmd.ts head",
     "checkout": "node --env-file-if-exists=.env src/checkout.ts",
     "webhook": "node --env-file-if-exists=.env src/webhook.ts",
     "human": "node --env-file-if-exists=.env src/human.ts",

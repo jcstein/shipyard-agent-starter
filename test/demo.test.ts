@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -33,6 +33,7 @@ describe("demo", () => {
     const env = {
       RECEIPTS_PATH: join(dir, "receipts.jsonl"),
       POSTS_PATH: join(dir, "posts.json"),
+      TRACE_DIR: join(dir, "traces"),
       SPEND_CAP_TIA: "0.05",
     };
     await runDemo(loadConfig(env), quoteFetch());
@@ -43,24 +44,34 @@ describe("demo", () => {
     assert.match(receipts, /"type":"human"/);
     assert.match(receipts, /"dryRun":true/);
     assert.match(receipts, /"tiaCharged":null/);
-    const notes = await verifyReceipts(env, async () => {
-      throw new Error("verify should not call Mocha for a mock post");
-    });
+    const notes = await verifyReceipts(
+      env,
+      async () => {
+        throw new Error("verify should not call Mocha for a mock post");
+      },
+      async () => {
+        throw new Error("verify should not spawn the Mocha helper for a mock post");
+      },
+    );
     assert.match(notes.join("\n"), /mock/);
     assert.match(notes.join("\n"), /not revenue/);
+    assert.equal(existsSync(env.TRACE_DIR), false);
   });
 
   it("refuses live mode with no key before calling the network", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "live-nokey-"));
+    const traces = join(dir, "traces");
     await assert.rejects(
       () =>
         runDemo(
-          loadConfig({ DEMO_MODE: "live" }),
+          loadConfig({ DEMO_MODE: "live", TRACE_DIR: traces }),
           async () => {
             throw new Error("network was called");
           },
         ),
       /EDEN_PRIVATE_KEY/,
     );
+    assert.equal(existsSync(traces), false);
   });
 
   it("refuses a quote above the spend cap", async () => {

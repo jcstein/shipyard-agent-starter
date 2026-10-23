@@ -15,6 +15,7 @@ import {
 import { sha256Hex } from "./hash.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
 import { appendReceipt, committedWei, readReceiptLines } from "./receipts.ts";
+import { openPaymentTrace, tracingFetch, type Tracer } from "./trace.ts";
 
 const PROMPT =
   "In one sentence, name a service a small agent could sell to a person for GBP. Do not spend money.";
@@ -26,6 +27,35 @@ export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Pro
     throw new Error("DEMO_MODE=live requires EDEN_PRIVATE_KEY. The default dry-run spends nothing.");
   }
 
+  let activeFetch = fetchImpl;
+  let tracer: Tracer | null = null;
+  if (cfg.mode === "live" && cfg.privateKey) {
+    tracer = openPaymentTrace({
+      dir: cfg.tracesDir,
+      signField: cfg.signField,
+      retryOtherSignField: cfg.retryOtherSignField,
+      secrets: [cfg.privateKey, cfg.stripeSecret, cfg.stripeWebhookSecret, cfg.celestiaToken].filter(
+        (item): item is string => Boolean(item),
+      ),
+    });
+    activeFetch = tracingFetch(fetchImpl, tracer);
+  }
+
+  try {
+    await runQuoted(cfg, activeFetch);
+  } finally {
+    if (tracer) {
+      try {
+        tracer.flush();
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+      }
+      console.log(`trace: ${tracer.path}`);
+    }
+  }
+}
+
+async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
   const quoted = await fetchQuote({
     baseUrl: cfg.houstonBase,
     model: cfg.model,
@@ -33,6 +63,7 @@ export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Pro
     maxTokens: cfg.maxTokens,
     escrow: cfg.escrow,
     fetchImpl,
+    step: "quote",
   });
   if (!isQuote(quoted)) {
     throw new Error("expected a 402 quote. The endpoint returned a completion without payment.");
@@ -71,9 +102,26 @@ export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Pro
     });
     console.log(`model: ${text}`);
     console.log(`deposit: ${paid.depositTxHash}`);
+    console.log(`payment signature field: ${paid.signFieldUsed}`);
     console.log(`payment header sha256: ${paymentHeaderSha256(paid.paymentHeader)}`);
+    const decoded = paid.paymentResponseDecoded;
+    if (decoded) {
+      console.log(
+        `payment-response: success ${String(decoded.success)}, network ${decoded.network ?? "absent"}, payer ${decoded.payer ?? "absent"}`,
+      );
+    } else if (paid.paymentResponse) {
+      console.log("payment-response header was present but was not JSON.");
+    } else {
+      console.log("payment-response header was absent.");
+    }
+    if (paid.costTia) {
+      const usd = paid.costUsd ? `, cost_usd ${paid.costUsd}` : "";
+      console.log(`houston cost_tia: ${formatTia(BigInt(paid.costTia))} TIA (${paid.costTia} wei)${usd}`);
+    }
     if (paid.tiaCharged === null) {
-      console.log("settled TIA was not in Payment-Response; tiaCharged is null. The quote is a ceiling, not the charge.");
+      console.log("settled TIA was not in the houston block or payment-response; tiaCharged is null. The quote is a ceiling, not the charge.");
+    } else {
+      console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge.`);
     }
     console.log("Local receipt written. Run `npm run post` to submit unposted lines to Mocha. That post is a testnet log, not revenue.");
   } catch (error) {
