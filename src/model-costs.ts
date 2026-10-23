@@ -1,8 +1,10 @@
-/** USD rates from Houston `GET /v1/models`, turned into a cost table. */
+/** USD rates from Houston `GET /v1/models`, turned into a cost table for a GBP budget. */
 
 export const TYPICAL_INPUT_TOKENS = 2_000;
 export const TYPICAL_OUTPUT_TOKENS = 500;
-export const BUDGET_USD = 10;
+/** Default team budget for `npm run models`. Houston prices stay in USD. */
+export const DEFAULT_BUDGET_GBP = 20;
+export const COINGECKO_EXCHANGE_RATES = "https://api.coingecko.com/api/v3/exchange_rates";
 
 const MICRO = 1_000_000n;
 const PICO = 1_000_000_000_000n;
@@ -11,6 +13,19 @@ export type ListedModel = {
   id: string;
   inputUsdPer1m: number;
   outputUsdPer1m: number;
+};
+
+export type BudgetInput = {
+  /** Pounds, `BUDGET_GBP`. */
+  gbp: number;
+  /** USD per 1 GBP. Live CoinGecko rate, or `GBP_USD`. */
+  usdPerGbp: number;
+};
+
+type ResolvedBudget = {
+  gbpMicro: bigint;
+  usdPerGbpMicro: bigint;
+  budgetPico: bigint;
 };
 
 type PricedModel = ListedModel & {
@@ -32,6 +47,63 @@ function priceMicro(usd: number, label: string): bigint {
     throw new Error(`${label} is out of range`);
   }
   return BigInt(scaled);
+}
+
+function parsePositiveDecimal(value: string, label: string): number {
+  if (!/^\d+(\.\d+)?$/.test(value)) {
+    throw new Error(`${label} must be a positive decimal`);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be greater than 0`);
+  }
+  return parsed;
+}
+
+export function readBudgetGbp(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.BUDGET_GBP?.trim() ?? "";
+  if (raw.length === 0) return DEFAULT_BUDGET_GBP;
+  return parsePositiveDecimal(raw, "BUDGET_GBP");
+}
+
+/** `GBP_USD` is USD per 1 GBP. Unset means the caller should read a live rate. */
+export function readGbpUsdOverride(env: NodeJS.ProcessEnv = process.env): number | null {
+  const raw = env.GBP_USD?.trim() ?? "";
+  if (raw.length === 0) return null;
+  return parsePositiveDecimal(raw, "GBP_USD");
+}
+
+function rateValue(rates: Record<string, unknown>, code: string): number {
+  const entry = rates[code];
+  if (!isRecord(entry) || typeof entry.value !== "number" || !(entry.value > 0)) {
+    throw new Error(`CoinGecko exchange rates are missing ${code}`);
+  }
+  return entry.value;
+}
+
+/** USD per GBP from CoinGecko `GET /api/v3/exchange_rates` (each fiat value is per 1 BTC). */
+export function usdPerGbpFromCoinGecko(body: unknown): number {
+  if (!isRecord(body) || !isRecord(body.rates)) {
+    throw new Error("CoinGecko exchange rates are missing rates");
+  }
+  return rateValue(body.rates, "usd") / rateValue(body.rates, "gbp");
+}
+
+function resolveBudget(input: BudgetInput): ResolvedBudget {
+  const gbpMicro = priceMicro(input.gbp, "BUDGET_GBP");
+  const usdPerGbpMicro = priceMicro(input.usdPerGbp, "GBP_USD");
+  if (gbpMicro === 0n) throw new Error("BUDGET_GBP must be greater than 0");
+  if (usdPerGbpMicro === 0n) throw new Error("GBP_USD must be greater than 0");
+  return { gbpMicro, usdPerGbpMicro, budgetPico: gbpMicro * usdPerGbpMicro };
+}
+
+/** `£20 = $26.7767 at 1.338835 USD per GBP`, using the rounded inputs the table divides by. */
+export function describeBudget(input: BudgetInput): string {
+  const budget = resolveBudget(input);
+  const gbp = formatScaled(budget.gbpMicro, MICRO);
+  const usd = formatScaled(budget.budgetPico, PICO);
+  const rate = formatScaled(budget.usdPerGbpMicro, MICRO);
+  return `£${gbp} = $${usd} at ${rate} USD per GBP`;
 }
 
 function tokenCount(tokens: number, label: string): bigint {
@@ -102,17 +174,20 @@ function priceModel(model: ListedModel): PricedModel {
   };
 }
 
-export function formatModelCostTable(models: ListedModel[]): string {
+export function formatModelCostTable(models: ListedModel[], budgetInput: BudgetInput): string {
   const rows = models.map(priceModel).sort((a, b) => {
     if (a.callPico < b.callPico) return -1;
     if (a.callPico > b.callPico) return 1;
     return a.id.localeCompare(b.id);
   });
-  const budgetPico = BigInt(BUDGET_USD) * PICO;
+  const budget = resolveBudget(budgetInput);
+  const gbp = formatScaled(budget.gbpMicro, MICRO);
+  const usd = formatScaled(budget.budgetPico, PICO);
   const header = [
-    "| Model | $ / 1M input | $ / 1M output | $ / call | Calls / $10 | Output tokens / $10 |",
+    `| Model | $ / 1M input | $ / 1M output | $ / call | Calls / £${gbp} ($${usd}) | Output tokens / £${gbp} ($${usd}) |`,
     "| --- | ---: | ---: | ---: | ---: | ---: |",
   ];
+  const budgetPico = budget.budgetPico;
   const lines = rows.map((row) => {
     const call = formatScaled(row.callPico, PICO);
     const calls = row.callPico === 0n ? "unlimited" : formatCount(roundDiv(budgetPico, row.callPico));

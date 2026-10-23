@@ -50,7 +50,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | `npm run checkout` | Creates a Stripe Checkout Session in the mode of your secret key. |
 | `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt. |
 | `npm run human -- --who "Ada" --what "paused spending" --why "quote was too high"` | Appends a `human` receipt. |
-| `npm run models` | Fetches Houston's live model list and prints the cost of a typical call. |
+| `npm run models` | Fetches Houston's model list and prints what the GBP budget buys at the live USD rate. |
 | `npm test` | Offline tests. |
 | `npm run typecheck` / `npm run lint` | `tsc` and eslint. |
 
@@ -108,6 +108,8 @@ See `.env.example`. The ones that matter:
 | `DEMO_MODE` | `dry-run` (default) or `live` |
 | `EDEN_PRIVATE_KEY` | Eden EVM key. Required for live mode. |
 | `SPEND_CAP_TIA` | Cap in TIA. Default `0.05`. |
+| `BUDGET_GBP` | Pounds in the `npm run models` table. Default `20`. |
+| `GBP_USD` | Optional USD per 1 GBP for that table. Unset reads CoinGecko. |
 | `HOUSTON_BASE_URL` | Default `https://inference.bot.fun/v1` |
 | `HOUSTON_MODEL` | Default `qwen/qwen-flash` |
 | `HOUSTON_SIGN_FIELD` | `paymentId` (default). `nonce` signs the nonce first; the funded run rejected that signature. |
@@ -139,7 +141,7 @@ Put that Eden address's key in `EDEN_PRIVATE_KEY`. This starter does not custody
 
 ## Model costs
 
-About $10 of Eden TIA is the inference budget (about 18-20 TIA at ~$0.56/TIA on 22 Oct 2026). What that buys on Houston's list is in [Model costs](docs/model-costs.md). `npm run models` prints the same table from the live list. Leave `SPEND_CAP_TIA` set.
+About £20 is the team inference budget. Houston's prices are USD. On 23 Oct 2026 CoinGecko had 1.338835 USD per GBP, so £20 was $26.7767, about 48 TIA at $0.558911/TIA. The table is in [Model costs](docs/model-costs.md). `npm run models` reprints it and prints both £ and $. `BUDGET_GBP` defaults to `20`. `GBP_USD` overrides the live rate. Leave `SPEND_CAP_TIA` set.
 
 ## First funded run
 
