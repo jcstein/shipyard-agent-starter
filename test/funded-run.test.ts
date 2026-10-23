@@ -156,6 +156,18 @@ function count(calls: Call[], part: string): number {
   return calls.filter((call) => call.url.includes(part)).length;
 }
 
+function depositSend(fresh: Fresh, txHash: string, headers?: Record<string, string>): Response {
+  return jsonResponse({ txHash, paymentId: fresh.paymentId }, 200, headers);
+}
+
+function depositStatus(txHash: string): Response {
+  return jsonResponse({ txHash, status: "confirmed" });
+}
+
+function fixtureJson(name: string): unknown {
+  return JSON.parse(readFileSync(join(fixtureDir, name), "utf8")) as unknown;
+}
+
 describe("preflight", () => {
   it("prints go when balance covers deposit plus gas under the cap, and never sends", async () => {
     const dir = mkdtempSync(join(tmpdir(), "preflight-go-"));
@@ -251,32 +263,47 @@ describe("preflight", () => {
 });
 
 describe("paid retry", () => {
-  it("retries the other sign field once on an invalid signature and does not deposit again", async () => {
+  it("signs paymentId first and retries nonce once on the buyer-key 403, without a second deposit", async () => {
     const dir = mkdtempSync(join(tmpdir(), "retry-on-"));
     const wallet = Wallet.createRandom();
     const fresh = freshQuote();
-    const invalid = jsonResponse({ error: { message: "invalid signature" } }, 402, { "payment-required": fresh.header });
-    const paid = jsonResponse(
-      { choices: [{ message: { content: "sold" } }], usage: { prompt_tokens: 2, completion_tokens: 3 } },
-      200,
-      { "payment-response": Buffer.from(JSON.stringify({ amount: "10" })).toString("base64") },
-    );
+    const txHash = `0x${"ab".repeat(32)}`;
+    const paymentResponse = Buffer.from(readFileSync(join(fixtureDir, "payment-response.json"), "utf8")).toString("base64");
+    const rejected = jsonResponse(fixtureJson("paid-403.json"), 403);
+    const paid = jsonResponse(fixtureJson("paid-200.json"), 200, { "payment-response": paymentResponse });
     const { fetchImpl, calls } = scripted([
       () => jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId }),
-      () => jsonResponse({ txHash: `0x${"ab".repeat(32)}` }),
-      () => jsonResponse({ status: "confirmed" }),
-      () => invalid,
+      () => depositSend(fresh, txHash, { deprecation: "true" }),
+      () => depositStatus(txHash),
+      () => rejected,
       () => paid,
     ]);
-    const result = await payAndComplete({
-      cfg: config(dir, wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1", HOUSTON_SIGN_FIELD: "nonce" }),
-      quote: fresh.quote,
-      messages: [{ role: "user", content: "hi" }],
-      committedWei: 0n,
-      fetchImpl,
-    });
-    assert.equal(result.signFieldUsed, "paymentId");
-    assert.equal(result.tiaCharged, "10");
+    const notes: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      notes.push(args.map((arg) => String(arg)).join(" "));
+    };
+    let result: Awaited<ReturnType<typeof payAndComplete>>;
+    try {
+      result = await payAndComplete({
+        cfg: config(dir, wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
+        quote: fresh.quote,
+        messages: [{ role: "user", content: "hi" }],
+        committedWei: 0n,
+        fetchImpl,
+      });
+    } finally {
+      console.log = original;
+    }
+    assert.equal(result.signFieldUsed, "nonce");
+    assert.equal(result.costTia, "9147039588615");
+    assert.equal(result.costUsd, "[redacted]");
+    assert.equal(result.tiaCharged, "9147039588615");
+    assert.equal(result.paymentResponseDecoded?.success, true);
+    assert.equal(result.paymentResponseDecoded?.network, "eip155:714");
+    assert.equal(result.paymentResponseDecoded?.payer, "[redacted]");
+    assert.equal(result.paymentResponseDecoded?.amount, null);
+    assert.match(notes.join("\n"), /deprecation header \(true\)/);
     assert.equal(count(calls, "/deposit/build"), 1);
     assert.equal(count(calls, "/deposit/send"), 1);
     const chats = calls.filter((call) => call.url.includes("/chat/completions"));
@@ -290,27 +317,28 @@ describe("paid retry", () => {
     const second = JSON.parse(Buffer.from(headerOf(secondCall, "payment-signature"), "base64").toString("utf8")) as {
       payload: { signature: string };
     };
-    assert.equal(recoverPersonalSigner(getBytes(fresh.nonce), first.payload.signature).toLowerCase(), wallet.address.toLowerCase());
     assert.equal(
-      recoverPersonalSigner(getBytes(fresh.paymentId), second.payload.signature).toLowerCase(),
+      recoverPersonalSigner(getBytes(fresh.paymentId), first.payload.signature).toLowerCase(),
       wallet.address.toLowerCase(),
     );
+    assert.equal(recoverPersonalSigner(getBytes(fresh.nonce), second.payload.signature).toLowerCase(), wallet.address.toLowerCase());
   });
 
   it("does not try the other field unless the flag is set", async () => {
     const dir = mkdtempSync(join(tmpdir(), "retry-off-"));
     const wallet = Wallet.createRandom();
     const fresh = freshQuote();
+    const txHash = `0x${"cd".repeat(32)}`;
     const { fetchImpl, calls } = scripted([
       () => jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId }),
-      () => jsonResponse({ txHash: `0x${"cd".repeat(32)}` }),
-      () => jsonResponse({ status: "confirmed" }),
-      () => jsonResponse({ error: { message: "invalid signature" } }, 402, { "payment-required": fresh.header }),
+      () => depositSend(fresh, txHash),
+      () => depositStatus(txHash),
+      () => jsonResponse(fixtureJson("paid-403.json"), 403),
     ]);
     await assert.rejects(
       () =>
         payAndComplete({
-          cfg: config(dir, wallet.privateKey, { HOUSTON_SIGN_FIELD: "nonce" }),
+          cfg: config(dir, wallet.privateKey),
           quote: fresh.quote,
           messages: [{ role: "user", content: "hi" }],
           committedWei: 0n,
@@ -320,6 +348,7 @@ describe("paid retry", () => {
         assert.ok(error instanceof Error);
         assert.match(error.message, /HOUSTON_RETRY_OTHER_SIGN_FIELD/);
         assert.match(error.message, /payment id already used/);
+        assert.match(error.message, /signed paymentId/);
         return true;
       },
     );
@@ -327,14 +356,14 @@ describe("paid retry", () => {
     assert.equal(count(calls, "/chat/completions"), 1);
   });
 
-  it("does not flip the sign field on a 500 or a missing-header 402", async () => {
+  it("does not flip the sign field on a 500, a missing-header 402, or an unrelated 403", async () => {
     const dir = mkdtempSync(join(tmpdir(), "retry-500-"));
     const wallet = Wallet.createRandom();
     const fresh = freshQuote();
     const serverError = scripted([
       () => jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId }),
-      () => jsonResponse({ txHash: `0x${"ef".repeat(32)}` }),
-      () => jsonResponse({ status: "confirmed" }),
+      () => depositSend(fresh, `0x${"ef".repeat(32)}`),
+      () => depositStatus(`0x${"ef".repeat(32)}`),
       () => jsonResponse({ error: { message: "invalid signature" } }, 500),
     ]);
     await assert.rejects(
@@ -353,8 +382,8 @@ describe("paid retry", () => {
 
     const missing = scripted([
       () => jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId }),
-      () => jsonResponse({ txHash: `0x${"11".repeat(32)}` }),
-      () => jsonResponse({ status: "confirmed" }),
+      () => depositSend(fresh, `0x${"11".repeat(32)}`),
+      () => depositStatus(`0x${"11".repeat(32)}`),
       () =>
         jsonResponse({ message: "Payment-Signature header is required" }, 402, {
           "payment-required": fresh.header,
@@ -373,6 +402,26 @@ describe("paid retry", () => {
     );
     assert.equal(count(missing.calls, "/deposit/send"), 1);
     assert.equal(count(missing.calls, "/chat/completions"), 1);
+
+    const busy = scripted([
+      () => jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId }),
+      () => depositSend(fresh, `0x${"22".repeat(32)}`),
+      () => depositStatus(`0x${"22".repeat(32)}`),
+      () => jsonResponse({ error: { message: "busy", type: "inference_error" } }, 403),
+    ]);
+    await assert.rejects(
+      () =>
+        payAndComplete({
+          cfg: config(dir, wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
+          quote: fresh.quote,
+          messages: [{ role: "user", content: "hi" }],
+          committedWei: 0n,
+          fetchImpl: busy.fetchImpl,
+        }),
+      /not classified as an invalid signature/,
+    );
+    assert.equal(count(busy.calls, "/deposit/send"), 1);
+    assert.equal(count(busy.calls, "/chat/completions"), 1);
   });
 });
 
@@ -390,7 +439,7 @@ describe("live trace", () => {
     const wallet = Wallet.createRandom();
     const fresh = freshQuote();
     const txHash = `0x${"ab".repeat(32)}`;
-    const paymentResponse = Buffer.from(JSON.stringify({ amount: "10" })).toString("base64");
+    const paymentResponse = Buffer.from(readFileSync(join(fixtureDir, "payment-response.json"), "utf8")).toString("base64");
     let chats = 0;
     const fetchImpl: typeof fetch = async (input) => {
       const url = String(input);
@@ -401,18 +450,23 @@ describe("live trace", () => {
             "payment-required": fresh.header,
           });
         }
-        return jsonResponse(
-          { choices: [{ message: { content: "sold" } }], usage: { prompt_tokens: 2, completion_tokens: 3 } },
-          200,
-          { "payment-response": paymentResponse },
-        );
+        return jsonResponse(fixtureJson("paid-200.json"), 200, { "payment-response": paymentResponse });
       }
       if (url.endsWith("/deposit/build")) return jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId });
-      if (url.endsWith("/deposit/send")) return jsonResponse({ txHash, status: "submitted" });
-      if (url.includes("/deposit/status/")) return jsonResponse({ status: "confirmed" });
+      if (url.endsWith("/deposit/send")) return depositSend(fresh, txHash, { deprecation: "true" });
+      if (url.includes("/deposit/status/")) return depositStatus(txHash);
       throw new Error(`unexpected ${url}`);
     };
-    await runDemo(config(dir, wallet.privateKey, { DEMO_MODE: "live", HOUSTON_SIGN_FIELD: "nonce" }), fetchImpl);
+    const notes: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      notes.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await runDemo(config(dir, wallet.privateKey, { DEMO_MODE: "live" }), fetchImpl);
+    } finally {
+      console.log = original;
+    }
     const traces = readdirSync(join(dir, "traces"));
     assert.equal(traces.length, 1);
     const file = readFileSync(join(dir, "traces", traces[0] ?? ""), "utf8");
@@ -422,25 +476,43 @@ describe("live trace", () => {
       exchanges: Array<{
         step: string;
         request: { headers: Record<string, string>; body: { signedTx?: string; paymentId?: string } | null };
-        response: { status: number; headers: Record<string, string>; body: { txHash?: string } | null };
+        response: {
+          status: number;
+          headers: Record<string, string>;
+          body: { txHash?: string; paymentId?: string; houston?: { cost_tia?: string } } | null;
+        };
       }>;
     };
-    assert.equal(trace.signField, "nonce");
+    assert.equal(trace.signField, "paymentId");
     assert.deepEqual(
       trace.exchanges.map((exchange) => exchange.step),
-      ["quote", "deposit-build", "deposit-send", "deposit-status", "paid-retry:nonce"],
+      ["quote", "deposit-build", "deposit-send", "deposit-status", "paid-retry:paymentId"],
     );
     const quote = trace.exchanges[0];
     const sent = trace.exchanges[2];
+    const status = trace.exchanges[3];
     const retry = trace.exchanges[4];
-    assert.ok(quote && sent && retry);
+    assert.ok(quote && sent && status && retry);
     assert.equal(quote.response.headers["payment-required"], fresh.header);
     assert.equal(sent.request.body?.paymentId, fresh.paymentId);
     assert.match(sent.request.body?.signedTx ?? "", /^0x02/);
+    assert.equal(sent.response.headers.deprecation, "true");
     assert.equal(sent.response.body?.txHash, txHash);
+    assert.equal(sent.response.body?.paymentId, fresh.paymentId);
+    assert.equal(status.response.body?.txHash, txHash);
     assert.equal(retry.response.status, 200);
+    assert.equal(retry.response.body?.houston?.cost_tia, "9147039588615");
     assert.equal(retry.request.headers["payment-signature"]?.length > 0, true);
     assert.equal(retry.response.headers["payment-response"], paymentResponse);
+    assert.equal(file.includes("signedTx"), true);
     assert.equal(file.includes("x-shipyard-trace-step"), false);
+    const printed = notes.join("\n");
+    assert.match(printed, /deprecation header \(true\)/);
+    assert.match(printed, /payment-response: success true, network eip155:714, payer \[redacted\]/);
+    assert.match(printed, /houston cost_tia: .* \(9147039588615 wei\), cost_usd \[redacted\]/);
+    assert.match(printed, /tiaCharged: 9147039588615 wei/);
+    const receipts = readFileSync(join(dir, "receipts.jsonl"), "utf8");
+    assert.match(receipts, /"tiaCharged":"9147039588615"/);
+    assert.equal(receipts.toLowerCase().includes(wallet.privateKey.slice(2).toLowerCase()), false);
   });
 });

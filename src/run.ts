@@ -104,8 +104,24 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
     console.log(`deposit: ${paid.depositTxHash}`);
     console.log(`payment signature field: ${paid.signFieldUsed}`);
     console.log(`payment header sha256: ${paymentHeaderSha256(paid.paymentHeader)}`);
+    const decoded = paid.paymentResponseDecoded;
+    if (decoded) {
+      console.log(
+        `payment-response: success ${String(decoded.success)}, network ${decoded.network ?? "absent"}, payer ${decoded.payer ?? "absent"}`,
+      );
+    } else if (paid.paymentResponse) {
+      console.log("payment-response header was present but was not JSON.");
+    } else {
+      console.log("payment-response header was absent.");
+    }
+    if (paid.costTia) {
+      const usd = paid.costUsd ? `, cost_usd ${paid.costUsd}` : "";
+      console.log(`houston cost_tia: ${formatTia(BigInt(paid.costTia))} TIA (${paid.costTia} wei)${usd}`);
+    }
     if (paid.tiaCharged === null) {
-      console.log("settled TIA was not in Payment-Response; tiaCharged is null. The quote is a ceiling, not the charge.");
+      console.log("settled TIA was not in the houston block or payment-response; tiaCharged is null. The quote is a ceiling, not the charge.");
+    } else {
+      console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge.`);
     }
     console.log("Local receipt written. Run `npm run post` to submit unposted lines to Mocha. That post is a testnet log, not revenue.");
   } catch (error) {

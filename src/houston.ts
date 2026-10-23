@@ -201,8 +201,9 @@ export function otherSignField(field: SignField): SignField {
 }
 
 /**
- * True when a response is a rejected signature, not a missing Payment-Signature header.
- * "invalid signature" and "signature verification failed" match. "header is required" does not.
+ * True when Houston rejected the Payment-Signature, not when the header is missing.
+ * The funded run's 403 ("signer is neither the escrow buyer nor an authorized device key")
+ * is a mismatch: the nonce signature recovers to the buyer, and paymentId is what Houston accepts.
  */
 export function explainsInvalidSignature(...parts: unknown[]): boolean {
   const texts: string[] = [];
@@ -216,6 +217,7 @@ export function explainsInvalidSignature(...parts: unknown[]): boolean {
   };
   for (const part of parts) visit(part);
   const text = texts.join("\n").toLowerCase();
+  if (text.includes("signer is neither the escrow buyer nor an authorized device key")) return true;
   if (!text.includes("signature")) return false;
   const missingHeader = /header is required|missing payment-signature|no payment-signature/.test(text);
   const rejected = /invalid|malformed|bad|wrong|mismatch|fail|recover|reject|not valid|unable to/.test(text);
@@ -408,26 +410,12 @@ function asWei(label: string, value: string | number): bigint {
   return BigInt(text);
 }
 
-function readTxHash(body: unknown): string {
-  const visit = (value: unknown): string | null => {
-    if (!isRecord(value)) return null;
-    for (const key of ["txHash", "hash", "transactionHash"]) {
-      const item = value[key];
-      if (typeof item === "string" && /^0x[0-9a-fA-F]{64}$/.test(item)) return item;
-    }
-    return visit(value.result) ?? visit(value.tx) ?? visit(value.transaction);
-  };
-  const hash = visit(body);
-  if (!hash) throw new Error(`deposit/send did not return a tx hash: ${JSON.stringify(body).slice(0, 300)}`);
-  return hash;
-}
-
 async function postJson(
   fetchImpl: typeof fetch,
   url: string,
   body: unknown,
   step?: string,
-): Promise<{ status: number; json: unknown }> {
+): Promise<{ status: number; json: unknown; headers: Headers }> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (step && isTraceFetch(fetchImpl)) headers["x-shipyard-trace-step"] = step;
   const res = await fetchImpl(url, {
@@ -436,7 +424,7 @@ async function postJson(
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   });
-  return { status: res.status, json: await readJson(res) };
+  return { status: res.status, json: await readJson(res), headers: res.headers };
 }
 
 export async function requestDepositBuild(input: {
@@ -467,6 +455,9 @@ export async function payAndComplete(input: {
   depositTxHash: string;
   paymentHeader: string;
   paymentResponse: string | null;
+  paymentResponseDecoded: DecodedPaymentResponse | null;
+  costTia: string | null;
+  costUsd: string | null;
   tiaCharged: string | null;
   signFieldUsed: SignField;
 }> {
@@ -517,6 +508,8 @@ export async function payAndComplete(input: {
     { signedTx, paymentId: input.quote.accepted.extra.paymentId },
     "deposit-send",
   );
+  const deprecated = deprecationNote(sent.headers.get("deprecation"));
+  if (deprecated) console.log(deprecated);
   if (sent.status !== 200) {
     throw new PaidRequestError(
       `deposit/send failed (${sent.status}): ${errorMessage(sent.json, "broadcast failed")}`,
@@ -525,7 +518,7 @@ export async function payAndComplete(input: {
   }
   let depositTxHash: string;
   try {
-    depositTxHash = readTxHash(sent.json);
+    depositTxHash = readDepositSend(sent.json, input.quote.accepted.extra.paymentId).txHash;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new PaidRequestError(
@@ -569,10 +562,27 @@ export async function payAndComplete(input: {
       };
     }
     const status = paid.error?.status ?? 0;
+    const signatureStatus = status === 400 || status === 402 || status === 403;
     return {
       ok: false as const,
-      invalidSignature: (status === 400 || status === 402) && explainsInvalidSignature(paid.error?.body),
+      invalidSignature: signatureStatus && explainsInvalidSignature(paid.error?.body),
       detail: paid.error?.message ?? "payment was not accepted",
+    };
+  };
+
+  const finish = (field: SignField, paymentHeader: string, completion: Completion, paymentResponse: string | null) => {
+    const cost = readHoustonCost(completion);
+    const decoded = decodePaymentResponse(paymentResponse);
+    return {
+      completion,
+      depositTxHash,
+      paymentHeader,
+      paymentResponse,
+      paymentResponseDecoded: decoded,
+      costTia: cost.costTia,
+      costUsd: cost.costUsd,
+      tiaCharged: cost.costTia ?? decoded?.amount ?? null,
+      signFieldUsed: field,
     };
   };
 
@@ -581,14 +591,7 @@ export async function payAndComplete(input: {
     const first = await attempt(firstField, `paid-retry:${firstField}`);
     const firstClass = classify(first);
     if (firstClass.ok) {
-      return {
-        completion: firstClass.completion,
-        depositTxHash,
-        paymentHeader: first.paymentHeader,
-        paymentResponse: firstClass.paymentResponse,
-        tiaCharged: settledAmount(firstClass.paymentResponse),
-        signFieldUsed: firstField,
-      };
+      return finish(firstField, first.paymentHeader, firstClass.completion, firstClass.paymentResponse);
     }
 
     let retriedOther = false;
@@ -603,14 +606,7 @@ export async function payAndComplete(input: {
       const second = await attempt(other, `paid-retry-other-sign-field:${other}`);
       const secondClass = classify(second);
       if (secondClass.ok) {
-        return {
-          completion: secondClass.completion,
-          depositTxHash,
-          paymentHeader: second.paymentHeader,
-          paymentResponse: secondClass.paymentResponse,
-          tiaCharged: settledAmount(secondClass.paymentResponse),
-          signFieldUsed: other,
-        };
+        return finish(other, second.paymentHeader, secondClass.completion, secondClass.paymentResponse);
       }
       detail = `${firstClass.detail} Then ${other}: ${secondClass.detail}`;
       invalidSignature = true;
@@ -637,15 +633,75 @@ export async function payAndComplete(input: {
   }
 }
 
-export function settledAmount(header: string | null): string | null {
+export type DecodedPaymentResponse = {
+  success: boolean | null;
+  network: string | null;
+  payer: string | null;
+  amount: string | null;
+};
+
+export function decodePaymentResponse(header: string | null): DecodedPaymentResponse | null {
   if (!header) return null;
   try {
     const parsed = JSON.parse(Buffer.from(header.replace(/\s+/g, ""), "base64").toString("utf8")) as unknown;
-    if (isRecord(parsed) && typeof parsed.amount === "string" && /^\d+$/.test(parsed.amount)) return parsed.amount;
+    if (!isRecord(parsed)) return null;
+    const amount = parsed.amount;
+    return {
+      success: typeof parsed.success === "boolean" ? parsed.success : null,
+      network: typeof parsed.network === "string" ? parsed.network : null,
+      payer: typeof parsed.payer === "string" ? parsed.payer : null,
+      amount: typeof amount === "string" && /^\d+$/.test(amount) ? amount : null,
+    };
   } catch {
     return null;
   }
-  return null;
+}
+
+export function settledAmount(header: string | null): string | null {
+  return decodePaymentResponse(header)?.amount ?? null;
+}
+
+export function readHoustonCost(body: unknown): { costTia: string | null; costUsd: string | null } {
+  if (!isRecord(body) || !isRecord(body.houston)) return { costTia: null, costUsd: null };
+  const tia = body.houston.cost_tia;
+  const usd = body.houston.cost_usd;
+  const costTia =
+    typeof tia === "string" && /^\d+$/.test(tia)
+      ? tia
+      : typeof tia === "number" && Number.isSafeInteger(tia) && tia >= 0
+        ? String(tia)
+        : null;
+  const costUsd = typeof usd === "string" || typeof usd === "number" ? String(usd) : null;
+  return { costTia, costUsd };
+}
+
+/** Present when deposit/send sends `deprecation`. The value on the funded run was `true`. */
+export function deprecationNote(value: string | null): string | null {
+  if (value === null) return null;
+  return `deposit/send included a deprecation header (${value}). This client still posts {signedTx, paymentId}.`;
+}
+
+export function readDepositSend(json: unknown, expectedPaymentId: string): { txHash: string; paymentId: string } {
+  if (!isRecord(json) || typeof json.txHash !== "string" || typeof json.paymentId !== "string") {
+    throw new Error(`deposit/send body must be {txHash, paymentId}: ${JSON.stringify(json).slice(0, 300)}`);
+  }
+  if (!/^0x[0-9a-fA-F]{64}$/.test(json.txHash)) {
+    throw new Error(`deposit/send txHash is not 32 bytes: ${json.txHash}`);
+  }
+  if (json.paymentId.toLowerCase() !== expectedPaymentId.toLowerCase()) {
+    throw new Error("deposit/send paymentId does not match the quote");
+  }
+  return { txHash: json.txHash, paymentId: json.paymentId };
+}
+
+export function readDepositStatus(httpStatus: number, json: unknown, txHash: string): string {
+  if (httpStatus !== 200 || !isRecord(json) || typeof json.status !== "string") {
+    throw new Error(`deposit status failed: ${errorMessage(json, String(httpStatus))}`);
+  }
+  if (typeof json.txHash === "string" && json.txHash.toLowerCase() !== txHash.toLowerCase()) {
+    throw new Error(`deposit status txHash ${json.txHash} does not match ${txHash}`);
+  }
+  return json.status.toLowerCase();
 }
 
 export async function waitForDeposit(baseUrl: string, txHash: string, fetchImpl: typeof fetch = fetch): Promise<void> {
@@ -656,10 +712,14 @@ export async function waitForDeposit(baseUrl: string, txHash: string, fetchImpl:
     if (isTraceFetch(fetchImpl)) headers["x-shipyard-trace-step"] = "deposit-status";
     const res = await fetchImpl(`${baseUrl}/deposit/status/${txHash}`, { headers, signal: AbortSignal.timeout(15_000) });
     const body = await readJson(res);
-    if (!res.ok || !isRecord(body) || typeof body.status !== "string") {
-      throw new PaidRequestError(`deposit status failed: ${errorMessage(body, res.statusText)}`, txHash);
+    let status: string;
+    try {
+      status = readDepositStatus(res.status, body, txHash);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new PaidRequestError(message, txHash);
     }
-    last = body.status.toLowerCase();
+    last = status;
     if (last === "confirmed" || last === "success") return;
     if (last === "failed" || last === "reverted") {
       throw new PaidRequestError(`deposit ${last}: ${txHash}`, txHash);

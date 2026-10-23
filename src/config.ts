@@ -61,7 +61,7 @@ function envBool(value: string | undefined, fallback: boolean): boolean {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const mode: DemoMode = env.DEMO_MODE === "live" ? "live" : "dry-run";
-  const signField: SignField = env.HOUSTON_SIGN_FIELD === "paymentId" ? "paymentId" : "nonce";
+  const signField: SignField = env.HOUSTON_SIGN_FIELD === "nonce" ? "nonce" : "paymentId";
   const retryFlag = env.HOUSTON_RETRY_OTHER_SIGN_FIELD?.trim().toLowerCase() ?? "";
   const retryOtherSignField = retryFlag === "1" || retryFlag === "true" || retryFlag === "yes";
   const maxTokens = Number(env.HOUSTON_MAX_TOKENS ?? "32");

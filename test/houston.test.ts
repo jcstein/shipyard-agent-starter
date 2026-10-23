@@ -7,10 +7,16 @@ import { Wallet, getBytes } from "ethers";
 import {
   assertDepositTx,
   assertFacilitatorSigned,
+  decodePaymentResponse,
+  deprecationNote,
   encodePaymentSignature,
   explainsInvalidSignature,
   parsePaymentRequired,
+  readDepositSend,
+  readDepositStatus,
+  readHoustonCost,
   recoverPersonalSigner,
+  signPayment,
   type ParsedQuote,
   type TxData,
 } from "../src/houston.ts";
@@ -80,10 +86,48 @@ describe("houston quote", () => {
   });
 
   it("treats an invalid signature as a rejection and a missing header as not one", () => {
+    const rejected = JSON.parse(readFileSync(join(fixtureDir, "paid-403.json"), "utf8")) as unknown;
     assert.equal(explainsInvalidSignature({ error: { message: "invalid signature" } }), true);
     assert.equal(explainsInvalidSignature("signature verification failed"), true);
+    assert.equal(explainsInvalidSignature(rejected), true);
     assert.equal(explainsInvalidSignature("Payment-Signature header is required"), false);
     assert.equal(explainsInvalidSignature({ message: "deposit not indexed" }), false);
+    assert.equal(explainsInvalidSignature({ error: { message: "busy", type: "inference_error" } }), false);
+  });
+
+  it("signs the paymentId bytes by default", async () => {
+    const parsed = quote();
+    const wallet = Wallet.createRandom();
+    const signature = await signPayment(wallet.privateKey, parsed, "paymentId");
+    assert.equal(
+      recoverPersonalSigner(getBytes(parsed.accepted.extra.paymentId), signature).toLowerCase(),
+      wallet.address.toLowerCase(),
+    );
+  });
+
+  it("parses the funded-run deposit and completion shapes", () => {
+    const sent = JSON.parse(readFileSync(join(fixtureDir, "deposit-send.json"), "utf8")) as {
+      txHash: string;
+      paymentId: string;
+    };
+    const status = JSON.parse(readFileSync(join(fixtureDir, "deposit-status.json"), "utf8")) as unknown;
+    const paid = JSON.parse(readFileSync(join(fixtureDir, "paid-200.json"), "utf8")) as unknown;
+    const responseHeader = Buffer.from(readFileSync(join(fixtureDir, "payment-response.json"), "utf8")).toString("base64");
+    assert.deepEqual(readDepositSend(sent, sent.paymentId), { txHash: sent.txHash, paymentId: sent.paymentId });
+    assert.throws(() => readDepositSend(sent, `0x${"11".repeat(32)}`), /paymentId/);
+    assert.equal(readDepositStatus(200, status, sent.txHash), "confirmed");
+    assert.throws(() => readDepositStatus(200, status, `0x${"22".repeat(32)}`), /txHash/);
+    assert.deepEqual(readHoustonCost(paid), { costTia: "9147039588615", costUsd: "[redacted]" });
+    assert.deepEqual(decodePaymentResponse(responseHeader), {
+      success: true,
+      network: "eip155:714",
+      payer: "[redacted]",
+      amount: null,
+    });
+    assert.equal(deprecationNote("true"), "deposit/send included a deprecation header (true). This client still posts {signedTx, paymentId}.");
+    assert.equal(deprecationNote(null), null);
+    assert.equal(JSON.stringify(sent).includes("signedTx"), false);
+    assert.equal(JSON.stringify(paid).includes("signedTx"), false);
   });
 
   it("accepts the observed deposit/build calldata only when it matches the quote", () => {
