@@ -48,7 +48,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | `npm run verify` | Checks the hash chain. Reads a real Mocha blob back when one was posted. |
 | `npm run post` | Submits unposted receipt lines with the Mocha helper. |
 | `npm run checkout` | Creates a Stripe Checkout Session in the mode of your secret key. |
-| `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt. |
+| `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt. `GET /success` and `GET /cancel` answer the Checkout redirect. |
 | `npm run human -- --who "Ada" --what "paused spending" --why "quote was too high"` | Appends a `human` receipt. |
 | `npm run models` | Fetches Houston's model list and prints what the GBP budget buys at the live USD rate. |
 | `npm test` | Offline tests. |
@@ -56,7 +56,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 
 ## Money flow
 
-**GBP in.** `npm run checkout` opens a Stripe Checkout Session priced in GBP. Point Stripe at the webhook (`stripe listen --forward-to localhost:8787/webhook`, or the dashboard). `checkout.session.completed` appends a `sale` with the checkout id, payment intent id, amount, `GBP`, and your customer ref (`client_reference_id`). `livemode: false` means a test-mode event. Test cards are not revenue. A live-mode charge from an outside customer is.
+**GBP in.** `npm run checkout` opens a Stripe Checkout Session priced in GBP. The session sets `managed_payments[enabled]=false`, so a new account (Managed Payments is on by default) does not need a product tax code. Point Stripe at the webhook (`stripe listen --events checkout.session.completed --forward-to localhost:8787/webhook`, or the dashboard). `checkout.session.completed` appends a `sale` with the checkout id, payment intent id, amount, `GBP`, and your customer ref (`client_reference_id`). `livemode: false` means a test-mode event. Test cards are not revenue. A live-mode charge from an outside customer is. Stripe then redirects the browser to `GET /success` or `GET /cancel` on that same server. Those pages say the payment was received or the checkout was cancelled, and that test-mode payments are not revenue.
 
 **TIA out.** Inference is Houston's OpenAI-compatible chat API. An unpaid `POST /v1/chat/completions` returns `402` with a base64 `payment-required` header (x402 v2, scheme `escrow-upto`, network `eip155:714`, asset `native`). The client then:
 
@@ -232,6 +232,7 @@ Exercised against live services while building this starter:
 - `eth_chainId` on `https://rpc.eden.gateway.fm/` returns `0x2ca` (714). Preflight uses that RPC for the balance and refuses any other chain id.
 - Public Mocha RPC `header.NetworkHead` reports `chain_id` `mocha-5`. The light-node JSON-RPC client sends `blob.Get`, `blob.GetAll`, and `blob.Submit` in the shapes celestia-node accepts. No blob was submitted on that path.
 - The Go helper, built with Go 1.25.1, against the public Mocha endpoints on 21 Oct 2026. `header.NetworkHead` on `https://public-endpoint.celestia-mocha.quiknode.pro` returned `mocha-5` (height 1893957 directly, and 1893965 through `npm run celestia:head`). `blob.Get` for 32 zero bytes at height 1893957 returned `blob: not found`, so the read reached the node. A throwaway key `celestia1zkf0tnwpqe08wc83ny0260wm6hs5c9tzd4cuwy` was created in a local test keyring. `npm run post` with that key connected to core gRPC `public-endpoint.celestia-mocha.quiknode.pro:9090` over TLS, read a zero balance (`0utia`; the account does not exist yet), and exited 1 with `insufficient funds: celestia1zkf0tnwpqe08wc83ny0260wm6hs5c9tzd4cuwy balance 0utia. Fund this address at https://mocha.celenium.io/faucet`. No PayForBlobs transaction was broadcast, and `posts.json` was not written. The faucet was not used. The mnemonic stayed on the local disk and is not in this repo.
+- A Stripe test-mode checkout, end to end, on 23 Oct 2026. `npm run checkout` created a Checkout Session. It was paid with a test card. `stripe listen` forwarded `checkout.session.completed` and the webhook responded 200. The webhook wrote a `sale` receipt (5.00 GBP, `livemode` false). `npm run verify` reported the hash chain ok. Test-mode charges are not revenue.
 
 Observed on a funded mainnet run (reported, not re-run from this environment):
 
@@ -242,7 +243,6 @@ Observed on a funded mainnet run (reported, not re-run from this environment):
 Not exercised from this environment:
 
 - Another funded Eden deposit. This checkout has no funded Eden key, so the shapes above are locked to that report and to the unit fixtures.
-- A Stripe API call. Webhook signature checks are unit-tested with a local secret.
 - A funded Mocha submit. The helper reads the blob back after `Submit` and only then prints the height and commitment, but this environment has no faucet TIA, so that round trip was not run. `npm run post` on an unfunded key stops before broadcasting.
 
 ## Layout
