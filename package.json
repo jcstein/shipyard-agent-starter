@@ -18,6 +18,7 @@
     "checkout": "node --env-file-if-exists=.env src/checkout.ts",
     "webhook": "node --env-file-if-exists=.env src/webhook.ts",
     "human": "node --env-file-if-exists=.env src/human.ts",
+    "models": "node --env-file-if-exists=.env src/models.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test test/*.test.ts"

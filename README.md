@@ -50,6 +50,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | `npm run checkout` | Creates a Stripe Checkout Session in the mode of your secret key. |
 | `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt. |
 | `npm run human -- --who "Ada" --what "paused spending" --why "quote was too high"` | Appends a `human` receipt. |
+| `npm run models` | Fetches Houston's live model list and prints the cost of a typical call. |
 | `npm test` | Offline tests. |
 | `npm run typecheck` / `npm run lint` | `tsc` and eslint. |
 
@@ -135,6 +136,10 @@ Eden gas and the escrow deposit are real TIA on chain 714. Follow the bot.fun do
 - [bot.fun/deposit](https://bot.fun/deposit) to generate a Celestia deposit address for an Eden `0x` recipient, or the Bridge tab on that page
 
 Put that Eden address's key in `EDEN_PRIVATE_KEY`. This starter does not custody it. `npm run preflight` prints the address it will use.
+
+## Model costs
+
+About $10 of Eden TIA is the inference budget (about 18-20 TIA at ~$0.56/TIA on 22 Oct 2026). What that buys on Houston's list is in [Model costs](docs/model-costs.md). `npm run models` prints the same table from the live list. Leave `SPEND_CAP_TIA` set.
 
 ## First funded run
 
@@ -242,6 +247,8 @@ Not exercised from this environment:
 
 ```
 src/demo.ts           dry-run or live entry
+src/models.ts         live Houston price table (`npm run models`)
+src/model-costs.ts    cost of a typical call from that list
 src/preflight-cli.ts  read-only go/no-go
 src/houston.ts        402 quote, deposit helpers, Payment-Signature
 src/trace.ts          redacted live HTTP trace
