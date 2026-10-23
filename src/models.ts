@@ -1,5 +1,11 @@
 import { HOUSTON_INFERENCE } from "./eden.ts";
-import { formatModelCostTable, parseModelList, TYPICAL_INPUT_TOKENS, TYPICAL_OUTPUT_TOKENS } from "./model-costs.ts";
+import {
+  BUDGET_USD,
+  formatModelCostTable,
+  parseModelList,
+  TYPICAL_INPUT_TOKENS,
+  TYPICAL_OUTPUT_TOKENS,
+} from "./model-costs.ts";
 
 const base = (process.env.HOUSTON_BASE_URL?.trim() || HOUSTON_INFERENCE).replace(/\/$/, "");
 const url = `${base}/models`;
@@ -13,7 +19,7 @@ fetch(url, { signal: AbortSignal.timeout(15_000) })
       `Typical call: ${TYPICAL_INPUT_TOKENS} input tokens and ${TYPICAL_OUTPUT_TOKENS} output tokens.`,
     );
     console.log(
-      `Calls / $10 is $10 divided by that cost. Output tokens / $10 is that many calls times ${TYPICAL_OUTPUT_TOKENS}.`,
+      `Calls / $${BUDGET_USD} is $${BUDGET_USD} divided by that cost. Output tokens / $${BUDGET_USD} is that many calls times ${TYPICAL_OUTPUT_TOKENS}.`,
     );
     console.log("Counts are rounded to the nearest whole number. Re-check the endpoint; prices change.");
     console.log("");

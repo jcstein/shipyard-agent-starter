@@ -10,7 +10,7 @@ describe("model costs", () => {
     assert.equal(callCostUsd(flash, 2_000, 500), "0.000154");
   });
 
-  it("sorts by typical-call cost, then id, and counts calls per $10", () => {
+  it("sorts by typical-call cost, then id, and counts calls per $20", () => {
     const table = formatModelCostTable([
       { id: "openai/gpt-5.5", inputUsdPer1m: 5, outputUsdPer1m: 30 },
       { id: "z-ai/glm-5.3-flash", inputUsdPer1m: 0.15, outputUsdPer1m: 0.5 },
@@ -19,8 +19,9 @@ describe("model costs", () => {
     ]);
     const ids = [...table.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
     assert.deepEqual(ids, ["qwen/qwen-flash", "openai/gpt-oss-120b", "z-ai/glm-5.3-flash", "openai/gpt-5.5"]);
-    assert.match(table, /\| `qwen\/qwen-flash` \| 0\.022 \| 0\.22 \| 0\.000154 \| 64,935 \| 32,467,532 \|/);
-    assert.match(table, /\| `openai\/gpt-5\.5` \| 5 \| 30 \| 0\.025 \| 400 \| 200,000 \|/);
+    assert.match(table, /Calls \/ \$20/);
+    assert.match(table, /\| `qwen\/qwen-flash` \| 0\.022 \| 0\.22 \| 0\.000154 \| 129,870 \| 64,935,065 \|/);
+    assert.match(table, /\| `openai\/gpt-5\.5` \| 5 \| 30 \| 0\.025 \| 800 \| 400,000 \|/);
   });
 
   it("reads id and the two rates and ignores the other fields", () => {

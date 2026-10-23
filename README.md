@@ -139,7 +139,7 @@ Put that Eden address's key in `EDEN_PRIVATE_KEY`. This starter does not custody
 
 ## Model costs
 
-About $10 of Eden TIA is the inference budget (about 18-20 TIA at ~$0.56/TIA on 22 Oct 2026). What that buys on Houston's list is in [Model costs](docs/model-costs.md). `npm run models` prints the same table from the live list. Leave `SPEND_CAP_TIA` set.
+About $20 of Eden TIA is the inference budget (about 35–36 TIA at ~$0.56/TIA on 22 Oct 2026). What that buys on Houston's list is in [Model costs](docs/model-costs.md). `npm run models` prints the same table from the live list. Leave `SPEND_CAP_TIA` set.
 
 ## First funded run
 

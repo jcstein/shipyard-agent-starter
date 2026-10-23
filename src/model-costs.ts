@@ -2,7 +2,7 @@
 
 export const TYPICAL_INPUT_TOKENS = 2_000;
 export const TYPICAL_OUTPUT_TOKENS = 500;
-export const BUDGET_USD = 10;
+export const BUDGET_USD = 20;
 
 const MICRO = 1_000_000n;
 const PICO = 1_000_000_000_000n;
@@ -110,7 +110,7 @@ export function formatModelCostTable(models: ListedModel[]): string {
   });
   const budgetPico = BigInt(BUDGET_USD) * PICO;
   const header = [
-    "| Model | $ / 1M input | $ / 1M output | $ / call | Calls / $10 | Output tokens / $10 |",
+    `| Model | $ / 1M input | $ / 1M output | $ / call | Calls / $${BUDGET_USD} | Output tokens / $${BUDGET_USD} |`,
     "| --- | ---: | ---: | ---: | ---: | ---: |",
   ];
   const lines = rows.map((row) => {
