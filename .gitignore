@@ -2,6 +2,7 @@ node_modules/
 .env
 receipts.jsonl
 posts.json
+jobs.json
 traces/
 *.log
 celestia-keys/

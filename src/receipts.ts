@@ -14,6 +14,8 @@ export type SaleReceipt = {
   currency: "GBP";
   customerRef: string;
   livemode: boolean;
+  /** What the customer asked the agent to do. */
+  task?: string;
   note?: string;
 };
 
@@ -36,6 +38,10 @@ export type InferenceReceipt = {
   /** sha256 of the Payment-Required header from the 402. */
   quoteHeaderSha256: string;
   dryRun: boolean;
+  /** Stripe Checkout Session that bought this call. Absent on demo lines. */
+  checkoutId?: string;
+  /** Stripe PaymentIntent id for that session. The sale receipt stores the same id as `paymentId`. */
+  stripePaymentId?: string | null;
 };
 
 export type HumanReceipt = {
@@ -87,6 +93,24 @@ export function committedWei(lines: string[]): bigint {
     }
   }
   return total;
+}
+
+export function findByCheckout(
+  path: string,
+  type: "sale" | "inference",
+  checkoutId: string,
+): SaleReceipt | InferenceReceipt | null {
+  for (const line of readReceiptLines(path)) {
+    let event: Receipt;
+    try {
+      event = JSON.parse(line) as Receipt;
+    } catch {
+      continue;
+    }
+    if (event.type === "sale" && type === "sale" && event.checkoutId === checkoutId) return event;
+    if (event.type === "inference" && type === "inference" && event.checkoutId === checkoutId) return event;
+  }
+  return null;
 }
 
 export function appendReceipt(path: string, event: NewReceipt, now = new Date()): Receipt {
