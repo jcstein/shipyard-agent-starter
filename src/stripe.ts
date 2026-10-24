@@ -51,6 +51,9 @@ export async function createCheckout(cfg: Config, fetchImpl: typeof fetch = fetc
     "line_items[0][price_data][product_data][description]",
     "GBP checkout. Test-mode payments are not revenue.",
   );
+  // New Stripe accounts enable Managed Payments by default, which rejects a
+  // line item that has no product tax code. This session opts out.
+  form.set("managed_payments[enabled]", "false");
   const res = await fetchImpl("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",
     headers: {
@@ -106,11 +109,26 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function sendPage(res: ServerResponse, title: string, message: string): void {
+  const html = `<!doctype html><meta charset="utf-8"><title>${title}</title><p>${message} Test-mode payments are not revenue.</p>`;
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
+}
+
 export function startWebhook(cfg: Config): ReturnType<typeof createServer> {
   if (!cfg.stripeWebhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is required");
   const server = createServer((req, res) => {
     void (async () => {
-      if (req.method !== "POST" || (req.url ?? "/").split("?")[0] !== "/webhook") {
+      const path = (req.url ?? "/").split("?")[0];
+      if (req.method === "GET" && path === "/success") {
+        sendPage(res, "Payment received", "Payment received.");
+        return;
+      }
+      if (req.method === "GET" && path === "/cancel") {
+        sendPage(res, "Checkout cancelled", "Checkout cancelled.");
+        return;
+      }
+      if (req.method !== "POST" || path !== "/webhook") {
         send(res, 404, { error: "not found" });
         return;
       }
