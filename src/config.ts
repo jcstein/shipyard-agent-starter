@@ -38,6 +38,8 @@ export type Config = {
   namespaceId: string;
   receiptsPath: string;
   postsPath: string;
+  /** Local checkout jobs: task, status, and the inference result. */
+  jobsPath: string;
   stripeSecret: string | null;
   stripeWebhookSecret: string | null;
   stripeAmountGbp: string;
@@ -103,6 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     namespaceId,
     receiptsPath: env.RECEIPTS_PATH?.trim() || "receipts.jsonl",
     postsPath: env.POSTS_PATH?.trim() || "posts.json",
+    jobsPath: env.JOBS_PATH?.trim() || "jobs.json",
     stripeSecret: blankToNull(env.STRIPE_SECRET_KEY),
     stripeWebhookSecret: blankToNull(env.STRIPE_WEBHOOK_SECRET),
     stripeAmountGbp: env.STRIPE_AMOUNT_GBP?.trim() || "5.00",
