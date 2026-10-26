@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { readReceiptLines } from "../src/receipts.ts";
-import { createCheckout, recordSale, startWebhook, verifyStripeSignature } from "../src/stripe.ts";
+import { createCheckout, recordSale, settleJobs, startWebhook, verifyStripeSignature, withCheckoutSessionId } from "../src/stripe.ts";
 
 describe("stripe", () => {
   it("checks the webhook signature", () => {
@@ -61,12 +61,28 @@ describe("stripe", () => {
     assert.equal(params.get("mode"), "payment");
     assert.equal(params.get("line_items[0][price_data][currency]"), "gbp");
     assert.equal(params.get("line_items[0][price_data][unit_amount]"), "500");
+    assert.equal(params.get("success_url"), "http://localhost:8787/success?session_id={CHECKOUT_SESSION_ID}");
+    assert.equal(params.get("custom_fields[0][key]"), "task");
+    assert.equal(params.get("custom_fields[0][optional]"), "false");
+    assert.equal(params.get("metadata[task]"), null);
+  });
+
+  it("keeps an existing checkout session placeholder", () => {
+    assert.equal(
+      withCheckoutSessionId("https://example.test/done?session_id={CHECKOUT_SESSION_ID}"),
+      "https://example.test/done?session_id={CHECKOUT_SESSION_ID}",
+    );
+    assert.equal(withCheckoutSessionId("https://example.test/done?x=1"), "https://example.test/done?x=1&session_id={CHECKOUT_SESSION_ID}");
   });
 
   it("answers checkout redirects and still posts the webhook", async () => {
     const dir = mkdtempSync(join(tmpdir(), "hook-"));
     const secret = "whsec_test";
-    const cfg = loadConfig({ RECEIPTS_PATH: join(dir, "receipts.jsonl"), STRIPE_WEBHOOK_SECRET: secret });
+    const cfg = loadConfig({
+      RECEIPTS_PATH: join(dir, "receipts.jsonl"),
+      JOBS_PATH: join(dir, "jobs.json"),
+      STRIPE_WEBHOOK_SECRET: secret,
+    });
     const server = startWebhook(cfg);
     const port = await new Promise<number>((resolve, reject) => {
       server.listen(0, "127.0.0.1", () => {
@@ -136,7 +152,8 @@ describe("stripe", () => {
         "stripe-signature": `t=${timestamp},v1=${signature}`,
       });
       assert.equal(paid.status, 200);
-      assert.deepEqual(JSON.parse(paid.body), { received: true });
+      assert.deepEqual(JSON.parse(paid.body), { received: true, job: "started" });
+      await settleJobs(server);
       const line = readReceiptLines(cfg.receiptsPath)[0] ?? "";
       const event = JSON.parse(line) as { type: string; amount: string; currency: string; livemode: boolean };
       assert.equal(event.type, "sale");
@@ -144,6 +161,7 @@ describe("stripe", () => {
       assert.equal(event.currency, "GBP");
       assert.equal(event.livemode, false);
     } finally {
+      await settleJobs(server);
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     }
   });
