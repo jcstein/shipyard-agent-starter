@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { EdictaNote } from "./receipts.ts";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
 export const DEFAULT_TASK =
@@ -20,6 +21,8 @@ export type Job = {
   requestId: string | null;
   createdAt: string;
   finishedAt: string | null;
+  /** Set when the paid call went through Edicta. Absent on the direct Houston path. */
+  edicta?: EdictaNote;
 };
 
 export type JobLog = {
@@ -177,9 +180,12 @@ export function renderSuccess(input: { sessionId: string | null; job: Job | null
   const kind = job.dryRun
     ? "Mock inference. No Houston call was made and no TIA was spent."
     : "Houston inference finished.";
+  const edicta = job.edicta
+    ? `<p>Edicta commitment ${escapeHtml(job.edicta.commitmentHash)} (${escapeHtml(job.edicta.mode)}). Authorization sha256 ${escapeHtml(job.edicta.authorizationSha256)}.</p>`
+    : "";
   return page(
     title,
-    `<h1>${title}</h1><p>Task</p><pre>${escapeHtml(job.task)}</pre><p>Result</p><pre>${escapeHtml(job.result ?? "")}</pre><p>${kind}</p><p>${revenueLine(job.livemode)}</p>`,
+    `<h1>${title}</h1><p>Task</p><pre>${escapeHtml(job.task)}</pre><p>Result</p><pre>${escapeHtml(job.result ?? "")}</pre><p>${kind}</p>${edicta}<p>${revenueLine(job.livemode)}</p>`,
   );
 }
 

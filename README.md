@@ -41,7 +41,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | Command | What it does |
 | --- | --- |
 | `npm run preflight` | Reads the Eden address, TIA balance, and a fresh 402. Prints go or no-go. Does not sign or broadcast. |
-| `npm run demo` | Dry-run by default. `DEMO_MODE=live` pays for one completion. |
+| `npm run demo` | Dry-run by default. `DEMO_MODE=live` pays for one completion. `DEMO_MODE=edicta` asks a local Edicta signer to pay. See [Try Edicta (optional)](#try-edicta-optional). |
 | `npm run celestia:build` | Builds the Mocha helper with Go 1.25.1. |
 | `npm run celestia:address` | Prints the celestia address to fund from the Mocha faucet. |
 | `npm run celestia:head` | Reads the public Mocha DA chain head. |
@@ -81,6 +81,8 @@ The header is base64 JSON:
 
 NativeEscrow is `0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8` on Eden. The client will not sign a deposit aimed at any other contract. Explorer: [eden.blockscout.com](https://eden.blockscout.com/address/0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8).
 
+That deposit path is the default. This process holds `EDEN_PRIVATE_KEY` and signs the transaction. [Try Edicta (optional)](#try-edicta-optional) is a separate switch: the signer holds the payer key, and this process does not. With the switch off, the demo does not call Edicta.
+
 The quote amount is a **ceiling**. `upto` means the facilitator can settle less and refund the rest. `tiaQuoted` on a receipt is that ceiling. `tiaCharged` is `houston.cost_tia` from the completion body when that field is a wei integer, and otherwise the `amount` on `payment-response` when that header has one. It is `null` when neither is present. Do not treat the ceiling as the cost, and do not treat either number as revenue.
 
 **Logs out.** `npm run post` batches receipt lines that are not in `posts.json` yet and submits one blob through the Go helper: the public Mocha core gRPC endpoint takes the PayForBlobs transaction, and the public DA endpoint reads the blob back before `posts.json` is written. `npm run verify` reads that blob again and checks the bytes match the local lines. Set `CELESTIA_RPC_URL` to send those calls to your own light node instead.
@@ -115,7 +117,130 @@ What you should see:
 - `npm run verify` prints the GBP amount and the TIA side for that session. In dry-run, TIA was not charged. Test mode is not revenue.
 - `npm run post` still submits receipt lines that are not in `posts.json` yet. A Mocha blob is a testnet log, not revenue.
 
-`DEMO_MODE=live` on the webhook process uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again.
+`DEMO_MODE=live` on the webhook process uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again. `DEMO_MODE=edicta` on that process uses the optional Edicta path below. It does not read the payer key from this environment. A test-mode card is still not revenue.
+
+## Try Edicta (optional)
+
+This is a trial path so you can see one paid Houston call go through [Edicta](https://github.com/vgonkivs/edicta) before deciding whether the workshop should depend on it. Leave it off and `npm run demo`, dry-run, and the checkout webhook behave as they do on `main`. Dry-run ignores `EDICTA`, including a bad `EDICTA_PAYER`.
+
+Pinned here: Edicta tag `v1.3.0` (`bf36625e5002205bd18553238621f879321021c3`). `go.mod` asks for Go 1.26.8. Do not build Edicta with the Mocha helper's Go 1.25.1. `@edicta/houston` 0.1.0 lives in that repo under `sdk/ts/edicta-houston` and is not on npm, so this starter does not depend on it. `src/edicta.ts` posts the same JSON to `POST /v1/commit` on a local `edicta agent serve`. The Eden profile at that tag is `eden-escrow-v1-draft.11`, still a draft.
+
+The gate stays keyless. The signer holds the Eden payer key and broadcasts the deposit. This process never sees that key and does not call `/deposit/send`. `HOUSTON_RETRY_OTHER_SIGN_FIELD` does not apply on this path: the signer only releases an EIP-191 signature over the paymentId, and this process has no key to try the nonce.
+
+`edicta init` builds a Mocha plus Base Sepolia USDC stack. It does not authorize this Eden payment. `make demo` is a Mocha TIA transfer. It does not pay Houston.
+
+### What you run
+
+You need four processes. The first three come from the Edicta checkout. The fourth is this starter. Config files, keys, and the Mocha TIA that publishes the commitment come from Slava (see [What to get from Slava](#what-to-get-from-slava)). Do not commit any of them.
+
+```bash
+git clone --branch v1.3.0 --depth 1 https://github.com/vgonkivs/edicta.git
+cd edicta
+make build
+```
+
+`make build` writes `bin/edicta` and `bin/edicta-signer`.
+
+Gate, keyless:
+
+```bash
+bin/edicta gate serve -config "$HOME/edicta-eden/edictad.toml"
+```
+
+Signer. A real payer key belongs in the standalone binary. `edicta signer serve` is the same service inside the full binary, for development only.
+
+```bash
+bin/edicta-signer -config "$HOME/edicta-eden/signer.toml"
+```
+
+Agent serve, loopback. `--signer-token-file` is the token this agent presents to the signer. It is not `EDICTA_TOKEN` and it is not the payer key. `--state-dir` is what lets a later call resume the same commitment.
+
+```bash
+bin/edicta agent serve \
+  --listen 127.0.0.1:8500 \
+  --config "$HOME/edicta-eden/edicta.toml" \
+  --signer-url http://127.0.0.1:8402 \
+  --signer-token-file "$HOME/edicta-eden/agent.token" \
+  --state-dir "$HOME/edicta-eden/agent-state"
+```
+
+One paid Houston call from this starter. `EDICTA_PAYER` is the signer's Eden address, not its key.
+
+```bash
+EDICTA_PAYER=0xYourSignerPayerAddress DEMO_MODE=edicta npm run demo
+```
+
+`EDICTA=1 DEMO_MODE=live` is the same switch. `npm run preflight` is unchanged: it still wants `EDEN_PRIVATE_KEY` and it does not talk to Edicta. Do not put the payer key in this environment to satisfy preflight.
+
+A paid checkout uses the same switch on the webhook process (`DEMO_MODE=edicta npm run webhook`). The card, if it is Stripe test mode, is not revenue.
+
+### What success looks like
+
+The demo prints the 402 quote, including the facilitator address. The signer's `facilitators` list has to include that address or the signer refuses the quote. The captured fixture used `0xEC7557EA26e646020B3C6c90F8Af6Fbf73460f45`. A live quote can name a different one. The demo prints it.
+
+Then:
+
+```text
+Edicta: this process will not sign. Commit fast at http://127.0.0.1:8500. The signer pays from 0x…
+edicta commitment: <64 lowercase hex>
+edicta mode: fast
+edicta rail ref: 0x<64 hex>
+```
+
+`edicta rail ref` is the Eden deposit transaction hash (`0x` plus the signer's `rail_ref`). The model sentence follows, then `Local receipt written. … That post is a testnet log, not revenue.`
+
+`receipts.jsonl` gains one `inference` line with `dryRun: false`. `depositTxHash` equals `edicta.railRef`. `edicta` is `{ commitmentHash, mode, railRef, payer, recorded, authorizationSha256 }`. The gate Authorization bytes are not on that line. Their sha256 is. The bytes are in the gitignored live trace and in the agent serve state. `npm run verify` still checks the hash chain. For a checkout job it also prints `Edicta commitment <hash>.` A test-mode sale on that job is not revenue.
+
+The client asks for fast mode. If agent serve refuses fast mode before any commitment hash exists (HTTP error code `usage`, message about fast mode), it retries that same quote once in strict mode and says so. A refusal that already carries a commitment hash is not retried as a new quote.
+
+### If the demo stops after a commitment
+
+Once a commitment hash exists, this process writes `edicta-pending.json` (gitignored). If the process stops before the inference receipt is written, run the same command again. It resumes that hash. It does not call `/deposit/build` again and it does not request a new 402. Do not delete the file to "start clean". A new quote would deposit again.
+
+After the chat completion returns, including a failure once the deposit is already broadcast, the inference receipt is written and the pending file is removed. The quote amount on that line is still a ceiling. `tiaCharged` is the settled figure when Houston returned one, and `null` when the completion failed. Neither number is revenue.
+
+Two builds for one payer must not run at once. The signer has one nonce. This starter does not queue them. Run one demo or one checkout job at a time.
+
+### What is still unproven
+
+Edicta's own README at `v1.3.0` says the Eden flow has not run live end to end through Edicta, fast mode has not run live, and the project is not production-ready. This starter has not run that live path either. `npm test` mocks `edicta agent serve`. It does not start the gate, the signer, Celestia, or Houston.
+
+Also unproven from here:
+
+- Fast mode. The client requests it. The one strict retry runs only when the refusal happens before a commitment hash. Edicta's Mocha checklist for fast mode has not been run.
+- Direct broadcast. The draft profile says Houston accepted `Payment-Signature` for a deposit sent with `eth_sendRawTransaction` on 2026-10-23. This client never calls `/deposit/send` or `POST /v1/paid-retry`. If Houston refuses because it never saw the deposit, that case is open. Ask Slava before adding a handoff.
+- Gate signature checks. This process stores the commitment hash and the sha256 of the Authorization. It does not run `edicta verify`.
+- `EDICTA_VALID_FOR` defaults to `10m`. The service refuses the commit when that window ends before the quote's `expiresAt`. Houston quotes seen so far expire about five minutes out, so `10m` covers them. A longer-lived quote needs a longer window, still at most `24h`.
+
+### What to get from Slava
+
+Slava Goncharuk (`vgonkivs`) owns the Edicta repo. Confirm tag `v1.3.0` or name a newer commit before you build. Go 1.26.8. Then these, which this starter cannot invent:
+
+- A gate config whose `action_types` includes `application/vnd.edicta.eden.escrow-deposit-tx.v1+cbor` (the production extractor, not the `-dev` id). `services/gate/edictad.example.toml` at this tag only lists the bank-send type.
+- Whether this trial is fast or strict. Fast needs `[gate.fast]`, `recorder.fast = true`, a `fast_dedicated_account`, a mandate with `fast_mode_max_delay`, and the operator's own consensus node. Strict needs none of that. Set `EDICTA_MODE=strict` if the gate is strict. The client still starts on fast and falls back once, only before a hash exists.
+- If the gate has a mandate: allow kind `x402-payment`, asset `eip155:714/native`, scale 18, and the Houston `payTo` as recipient. The amount fact is the deposit value plus `gas_limit * max_fee_per_gas`, which is larger than the settled charge. With no mandate the gate can authorize without a spending policy, and fast mode is then impossible.
+- A dedicated Eden payer key, a small TIA float on that address, and the address (not the key) to put in `EDICTA_PAYER`. Signer settings that match this server: `payment_signature_field = "paymentId"`, `check_server_signature = true`, chain id 714, and `max_refund_delay_s` at least `604500` (the example file uses `604800`). The example settlement block wants L1 and two labelled operators (`min_sources = 2`). One public RPC does not satisfy that. Ask which RPCs to use, and whether a trial may drop to L0 or `min_sources = 1`. That weakens the check. Do not make it the default without him.
+- The facilitator address from a live 402, added to the signer's `facilitators` list. Trust the address the demo prints, not the fixture.
+- The agent key, the gate's public keys, the X25519 payload recipient, the signer URL, and a signer token file for this agent only. `agent.submitter_trust` has to be set (`same_operator` when you run the Recorder). A mandate supplies recipients, or you pass `--recipient`.
+- Mocha TIA on the Recorder account so the commitment blob can be published. That TIA pays for the Celestia blob. It does not pay the Eden deposit.
+- Whether Houston, today, accepts `Payment-Signature` for a deposit this signer sent with `eth_sendRawTransaction`. The draft profile records one direct send on 2026-10-23. It has not been repeated through this starter.
+
+### Environment
+
+| Variable | Role |
+| --- | --- |
+| `DEMO_MODE=edicta` | Turns the paid path on. `EDICTA=1` does the same only when `DEMO_MODE=live`. Dry-run ignores `EDICTA`. |
+| `EDICTA_AGENT_URL` | Loopback `edicta agent serve`. Default `http://127.0.0.1:8500`. A non-loopback URL is refused. |
+| `EDICTA_PAYER` | Signer payer address, `0x` plus 40 hex digits. Required when the switch is on. |
+| `EDICTA_TOKEN` | Optional bearer for agent serve. Loopback serve does not require one. Not the signer token and not the payer key. |
+| `EDICTA_MODE` | `fast` (default) or `strict`. |
+| `EDICTA_POLICY_ID` / `EDICTA_POLICY_VERSION` | Labels in the published decision. Defaults `shipyard-houston` and `1`. They are not the mandate. |
+| `EDICTA_MODEL_VERSION` | Label beside `HOUSTON_MODEL`. Default `1`. |
+| `EDICTA_VALID_FOR` | Go duration. Default `10m`. Must reach past the quote `expiresAt`. |
+| `EDICTA_WAIT` | Go duration for the settlement wait. Default `5m`. The HTTP call may sit for that plus six minutes. |
+| `EDICTA_PENDING_PATH` | Resume file. Default `edicta-pending.json`. Gitignored. |
+
+The committed context is `prompt_sha256` of `JSON.stringify(messages)`, not the prompt text.
 
 ## Spend cap
 
@@ -128,7 +253,7 @@ The private key is read from `EDEN_PRIVATE_KEY` and used only to derive the addr
 `receipts.jsonl` is one JSON object per line. Each line has `ts` and `prev`, the sha256 of the previous line (`prev` is 64 zeroes on the first line).
 
 - `sale`: `checkoutId`, `paymentId`, `amount`, `currency` (`GBP`), `customerRef`, `livemode`, and `task` when a checkout bought the work
-- `inference`: `requestId` (the quote `paymentId`), `model`, `tokensIn`, `tokensOut`, `tiaCharged`, `tiaQuoted`, `escrow`, `depositTxHash`, `paymentHeaderSha256`, `quoteHeaderSha256`, `dryRun`. A checkout job also has `checkoutId` and `stripePaymentId`, the same ids as the sale.
+- `inference`: `requestId` (the quote `paymentId`), `model`, `tokensIn`, `tokensOut`, `tiaCharged`, `tiaQuoted`, `escrow`, `depositTxHash`, `paymentHeaderSha256`, `quoteHeaderSha256`, `dryRun`. A checkout job also has `checkoutId` and `stripePaymentId`, the same ids as the sale. An Edicta payment also has `edicta`: `commitmentHash`, `mode`, `railRef`, `payer`, `recorded`, `authorizationSha256`. Flag off, that field is absent.
 - `human`: `who`, `what`, `why`
 
 ## Environment
@@ -137,7 +262,7 @@ See `.env.example`. The ones that matter:
 
 | Variable | Role |
 | --- | --- |
-| `DEMO_MODE` | `dry-run` (default) or `live`. The webhook uses this to choose mock inference or a paid Houston call. |
+| `DEMO_MODE` | `dry-run` (default), `live`, or `edicta`. The webhook uses this to choose mock inference, a paid Houston call signed here, or the optional Edicta signer. |
 | `EDEN_PRIVATE_KEY` | Eden EVM key. Required for live mode. |
 | `SPEND_CAP_TIA` | Cap in TIA. Default `0.05`. |
 | `BUDGET_GBP` | Pounds in the `npm run models` table. Default `20`. |
@@ -161,6 +286,9 @@ See `.env.example`. The ones that matter:
 | `STRIPE_WEBHOOK_SECRET` | Webhook signing secret |
 | `STRIPE_AMOUNT_GBP` | Checkout price, default `5.00` |
 | `JOBS_PATH` | Checkout job results. Default `jobs.json`. Gitignored. |
+| `EDICTA` | `1` with `DEMO_MODE=live` uses the Edicta signer. Ignored in dry-run. See [Try Edicta (optional)](#try-edicta-optional). |
+| `EDICTA_PAYER` | Eden address of that signer. Not a private key. |
+| `EDICTA_AGENT_URL` | Loopback agent serve. Default `http://127.0.0.1:8500`. |
 
 ## Get TIA on Eden
 
@@ -279,6 +407,7 @@ Not exercised from this environment:
 - Another funded Eden deposit. This checkout has no funded Eden key, so the shapes above are locked to that report and to the unit fixtures. A checkout-triggered Houston call is covered by a scripted fetch in `npm test`. It was not sent to Houston from this environment.
 - A Checkout Session created from this environment for the new task field. The webhook tests sign a local event. Dry-run jobs use mock inference and do not call Stripe or Houston.
 - A funded Mocha submit. The helper reads the blob back after `Submit` and only then prints the height and commitment, but this environment has no faucet TIA, so that round trip was not run. `npm run post` on an unfunded key stops before broadcasting.
+- A live Eden payment through Edicta. The optional path is covered by a mocked `edicta agent serve` in `npm test`. Edicta `v1.3.0` says the Eden flow has not run live end to end through Edicta, and that fast mode has not run live. This starter has not run either.
 
 ## Layout
 
@@ -288,6 +417,7 @@ src/models.ts         live Houston price table (`npm run models`)
 src/model-costs.ts    cost of a typical call from that list
 src/preflight-cli.ts  read-only go/no-go
 src/houston.ts        402 quote, deposit helpers, Payment-Signature
+src/edicta.ts         optional commit to a local edicta agent serve
 src/trace.ts          redacted live HTTP trace
 src/receipts.ts       hash-chained JSONL
 celestia/             Go helper: celestia-node client, public Mocha endpoints

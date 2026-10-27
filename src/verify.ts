@@ -19,6 +19,7 @@ type InferenceView = {
   tiaCharged: string | null;
   tiaQuoted: string;
   dryRun: boolean;
+  edictaCommitment: string | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,12 +52,14 @@ export function describeCheckoutJobs(lines: string[]): string[] {
       });
     }
     if (event.type === "inference") {
+      const edicta = isRecord(event.edicta) ? event.edicta : null;
       inferences.push({
         checkoutId: event.checkoutId,
         stripePaymentId: typeof event.stripePaymentId === "string" ? event.stripePaymentId : null,
         tiaCharged: typeof event.tiaCharged === "string" ? event.tiaCharged : null,
         tiaQuoted: typeof event.tiaQuoted === "string" ? event.tiaQuoted : "0",
         dryRun: event.dryRun === true,
+        edictaCommitment: edicta && typeof edicta.commitmentHash === "string" ? edicta.commitmentHash : null,
       });
     }
   }
@@ -75,7 +78,8 @@ export function describeCheckoutJobs(lines: string[]): string[] {
       sale.paymentId && inference.stripePaymentId === sale.paymentId
         ? `Stripe payment ${sale.paymentId} is on both receipts.`
         : `Sale payment ${sale.paymentId ?? "absent"}; inference payment ${inference.stripePaymentId ?? "absent"}.`;
-    return `Job ${sale.checkoutId}: ${gbp} ${tia} ${payment}`;
+    const edicta = inference.edictaCommitment ? ` Edicta commitment ${inference.edictaCommitment}.` : "";
+    return `Job ${sale.checkoutId}: ${gbp} ${tia} ${payment}${edicta}`;
   });
 }
 

@@ -4,6 +4,7 @@ import { assertPrivateKey } from "./config.ts";
 import { EDEN_CHAIN_ID, EDEN_NETWORK, EXPLORER } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { assertWithinCap, formatTia, formatUsd, quoteUsd } from "./money.ts";
+import type { EdictaNote } from "./receipts.ts";
 import { isTraceFetch } from "./trace.ts";
 
 export type ChatMessage = { role: "user" | "system" | "assistant"; content: string };
@@ -427,13 +428,13 @@ async function postJson(
   return { status: res.status, json: await readJson(res), headers: res.headers };
 }
 
-export async function requestDepositBuild(input: {
+export async function requestDepositBuildDocument(input: {
   baseUrl: string;
   from: string;
   quote: ParsedQuote;
   escrow: string;
   fetchImpl?: typeof fetch;
-}): Promise<TxData> {
+}): Promise<{ tx: TxData; build: Record<string, unknown> }> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const built = await postJson(
     fetchImpl,
@@ -441,7 +442,20 @@ export async function requestDepositBuild(input: {
     { from: input.from, accepted: input.quote.accepted },
     "deposit-build",
   );
-  return readDepositBuild(built.status, built.json, input.quote, input.escrow);
+  const tx = readDepositBuild(built.status, built.json, input.quote, input.escrow);
+  if (!isRecord(built.json)) throw new Error("deposit/build body is not an object");
+  return { tx, build: built.json };
+}
+
+export async function requestDepositBuild(input: {
+  baseUrl: string;
+  from: string;
+  quote: ParsedQuote;
+  escrow: string;
+  fetchImpl?: typeof fetch;
+}): Promise<TxData> {
+  const built = await requestDepositBuildDocument(input);
+  return built.tx;
 }
 
 export async function payAndComplete(input: {
@@ -460,6 +474,8 @@ export async function payAndComplete(input: {
   costUsd: string | null;
   tiaCharged: string | null;
   signFieldUsed: SignField;
+  /** Set only by the opt-in Edicta path. Absent when this process signed the deposit. */
+  edicta?: EdictaNote;
 }> {
   if (!input.cfg.privateKey) throw new Error("EDEN_PRIVATE_KEY is required");
   const privateKey = input.cfg.privateKey;

@@ -434,6 +434,15 @@ describe("live trace", () => {
     assert.equal(JSON.stringify(redacted).toLowerCase().includes(key.slice(2).toLowerCase()), false);
     assert.equal(redacted.signedTx, "0x02abcd");
     assert.equal(redacted.privateKey, "[redacted]");
+    const withHeader = redactSecrets(
+      {
+        request: { headers: { authorization: "Bearer secret-token-value" } },
+        authorization: "gate-authorization-bytes",
+      },
+      ["secret-token-value"],
+    );
+    assert.equal(withHeader.request.headers.authorization, "[redacted]");
+    assert.equal(withHeader.authorization, "gate-authorization-bytes");
   });
 
   it("writes the paid-flow exchanges and not the private key", async () => {
