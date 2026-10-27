@@ -183,6 +183,13 @@ export function renderSuccess(input: { sessionId: string | null; job: Job | null
   );
 }
 
+/** Keep long task and result strings inside the viewport. `<pre>` does not wrap on its own. */
+const PAGE_STYLE = [
+  "html{color:#000;background:#fff}",
+  "body{box-sizing:border-box;margin:0;padding:1rem;max-width:40rem;font-family:serif;white-space:normal;overflow-wrap:anywhere}",
+  "pre{box-sizing:border-box;margin:0 0 1rem;max-width:100%;font-family:inherit;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}",
+].join("");
+
 function page(title: string, body: string): string {
-  return `<!doctype html><meta charset="utf-8"><title>${title}</title>${body}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>${body}</body></html>`;
 }
