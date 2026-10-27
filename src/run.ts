@@ -18,7 +18,7 @@ import { appendReceipt, committedWei, readReceiptLines } from "./receipts.ts";
 import { openPaymentTrace, tracingFetch, type Tracer } from "./trace.ts";
 
 const PROMPT =
-  "In one sentence, name a service a small agent could sell to a person for GBP. Do not spend money.";
+  "In one sentence, pitch a £15–£30 service a small agent could sell to a person or small business for GBP this week. Do not spend money.";
 
 export const DEMO_MESSAGES: ChatMessage[] = [{ role: "user", content: PROMPT }];
 

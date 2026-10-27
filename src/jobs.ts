@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
 export const DEFAULT_TASK =
-  "In one sentence, name a service a small agent could sell to a person for GBP. Do not spend money.";
+  "In one sentence, pitch a £15–£30 service a small agent could sell to a person or small business for GBP this week. Do not spend money.";
 
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
