@@ -3,6 +3,8 @@ node_modules/
 receipts.jsonl
 posts.json
 jobs.json
+edicta-pending.json
+edicta-pending.json.tmp
 traces/
 *.log
 celestia-keys/

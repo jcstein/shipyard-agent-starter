@@ -419,6 +419,7 @@ describe("paid checkout", () => {
         requestId: string;
       };
       assert.equal(inference.dryRun, false);
+      assert.equal("edicta" in inference, false);
       assert.equal(inference.tiaCharged, "9147039588615");
       assert.equal(inference.checkoutId, "cs_test_live");
       assert.equal(inference.stripePaymentId, "pi_test_live");
@@ -433,6 +434,7 @@ describe("paid checkout", () => {
       assert.match(notes.join("\n"), /9147039588615 wei/);
       assert.match(notes.join("\n"), /not revenue/);
       assert.match(notes.join("\n"), /pi_test_live is on both receipts/);
+      assert.equal(notes.join("\n").includes("Edicta"), false);
     } finally {
       await close(server);
     }

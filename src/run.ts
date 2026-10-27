@@ -1,6 +1,15 @@
 import type { Config } from "./config.ts";
 import { localPostMatches, readPostLog, recordMockPost, writePostLog } from "./celestia.ts";
 import {
+  clearEdictaPending,
+  continueEdictaPending,
+  describeEdicta,
+  edictaReceiptFields,
+  EdictaPaidError,
+  payThroughEdicta,
+  recordFailedEdictaPayment,
+} from "./edicta.ts";
+import {
   assertFacilitatorSigned,
   assertQuoteUsd,
   describeQuote,
@@ -14,7 +23,7 @@ import {
 } from "./houston.ts";
 import { sha256Hex } from "./hash.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
-import { appendReceipt, committedWei, readReceiptLines } from "./receipts.ts";
+import { appendReceipt, committedWei, readReceiptLines, type EdictaNote } from "./receipts.ts";
 import { openPaymentTrace, tracingFetch, type Tracer } from "./trace.ts";
 
 const PROMPT =
@@ -22,21 +31,25 @@ const PROMPT =
 
 export const DEMO_MESSAGES: ChatMessage[] = [{ role: "user", content: PROMPT }];
 
+function traceSecrets(cfg: Config): string[] {
+  return [cfg.privateKey, cfg.edictaToken, cfg.stripeSecret, cfg.stripeWebhookSecret, cfg.celestiaToken].filter(
+    (item): item is string => Boolean(item),
+  );
+}
+
 export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Promise<void> {
-  if (cfg.mode === "live" && !cfg.privateKey) {
+  if (cfg.mode === "live" && !cfg.edicta && !cfg.privateKey) {
     throw new Error("DEMO_MODE=live requires EDEN_PRIVATE_KEY. The default dry-run spends nothing.");
   }
 
   let activeFetch = fetchImpl;
   let tracer: Tracer | null = null;
-  if (cfg.mode === "live" && cfg.privateKey) {
+  if (cfg.mode === "live" && (cfg.privateKey || cfg.edicta)) {
     tracer = openPaymentTrace({
       dir: cfg.tracesDir,
       signField: cfg.signField,
       retryOtherSignField: cfg.retryOtherSignField,
-      secrets: [cfg.privateKey, cfg.stripeSecret, cfg.stripeWebhookSecret, cfg.celestiaToken].filter(
-        (item): item is string => Boolean(item),
-      ),
+      secrets: traceSecrets(cfg),
     });
     activeFetch = tracingFetch(fetchImpl, tracer);
   }
@@ -55,7 +68,78 @@ export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Pro
   }
 }
 
+function logPaid(paid: {
+  depositTxHash: string;
+  signFieldUsed: string;
+  paymentHeader: string;
+  paymentResponse: string | null;
+  paymentResponseDecoded: { success: boolean | null; network: string | null; payer: string | null } | null;
+  costTia: string | null;
+  costUsd: string | null;
+  tiaCharged: string | null;
+  edicta?: EdictaNote;
+}): void {
+  console.log(`deposit: ${paid.depositTxHash}`);
+  if (paid.edicta) console.log(describeEdicta(paid.edicta));
+  console.log(`payment signature field: ${paid.signFieldUsed}`);
+  console.log(`payment header sha256: ${paymentHeaderSha256(paid.paymentHeader)}`);
+  const decoded = paid.paymentResponseDecoded;
+  if (decoded) {
+    console.log(
+      `payment-response: success ${String(decoded.success)}, network ${decoded.network ?? "absent"}, payer ${decoded.payer ?? "absent"}`,
+    );
+  } else if (paid.paymentResponse) {
+    console.log("payment-response header was present but was not JSON.");
+  } else {
+    console.log("payment-response header was absent.");
+  }
+  if (paid.costTia) {
+    const usd = paid.costUsd ? `, cost_usd ${paid.costUsd}` : "";
+    console.log(`houston cost_tia: ${formatTia(BigInt(paid.costTia))} TIA (${paid.costTia} wei)${usd}`);
+  }
+  if (paid.tiaCharged === null) {
+    console.log("settled TIA was not in the houston block or payment-response; tiaCharged is null. The quote is a ceiling, not the charge.");
+  } else {
+    console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge.`);
+  }
+  console.log("Local receipt written. Run `npm run post` to submit unposted lines to Mocha. That post is a testnet log, not revenue.");
+}
+
 async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
+  if (cfg.edicta) {
+    let continued: Awaited<ReturnType<typeof continueEdictaPending>>;
+    try {
+      continued = await continueEdictaPending({ cfg, checkoutId: null, fetchImpl });
+    } catch (error) {
+      if (error instanceof EdictaPaidError) recordFailedEdictaPayment(cfg, error);
+      throw error;
+    }
+    if (continued?.kind === "already") return;
+    if (continued?.kind === "paid") {
+      const paid = continued.paid;
+      const text = paid.completion.choices?.[0]?.message?.content ?? "";
+      appendReceipt(cfg.receiptsPath, {
+        type: "inference",
+        requestId: continued.quote.accepted.extra.paymentId,
+        model: paid.model,
+        tokensIn: paid.completion.usage?.prompt_tokens ?? null,
+        tokensOut: paid.completion.usage?.completion_tokens ?? null,
+        tiaCharged: paid.tiaCharged,
+        tiaQuoted: continued.quote.accepted.amount,
+        escrow: continued.quote.accepted.extra.escrowContract,
+        depositTxHash: paid.depositTxHash,
+        paymentHeaderSha256: paymentHeaderSha256(paid.paymentHeader),
+        quoteHeaderSha256: sha256Hex(continued.quote.header),
+        dryRun: false,
+        ...edictaReceiptFields(paid.edicta),
+      });
+      clearEdictaPending(cfg.edictaPendingPath);
+      console.log(`model: ${text}`);
+      logPaid(paid);
+      return;
+    }
+  }
+
   const quoted = await fetchQuote({
     baseUrl: cfg.houstonBase,
     model: cfg.model,
@@ -84,7 +168,16 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
   }
 
   try {
-    const paid = await payAndComplete({ cfg, quote: quoted, messages: DEMO_MESSAGES, committedWei: spent, fetchImpl });
+    const paid = cfg.edicta
+      ? await payThroughEdicta({
+          cfg,
+          quote: quoted,
+          messages: DEMO_MESSAGES,
+          committedWei: spent,
+          checkoutId: null,
+          fetchImpl,
+        })
+      : await payAndComplete({ cfg, quote: quoted, messages: DEMO_MESSAGES, committedWei: spent, fetchImpl });
     const text = paid.completion.choices?.[0]?.message?.content ?? "";
     appendReceipt(cfg.receiptsPath, {
       type: "inference",
@@ -99,33 +192,14 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
       paymentHeaderSha256: paymentHeaderSha256(paid.paymentHeader),
       quoteHeaderSha256: sha256Hex(quoted.header),
       dryRun: false,
+      ...edictaReceiptFields(paid.edicta),
     });
+    if (paid.edicta) clearEdictaPending(cfg.edictaPendingPath);
     console.log(`model: ${text}`);
-    console.log(`deposit: ${paid.depositTxHash}`);
-    console.log(`payment signature field: ${paid.signFieldUsed}`);
-    console.log(`payment header sha256: ${paymentHeaderSha256(paid.paymentHeader)}`);
-    const decoded = paid.paymentResponseDecoded;
-    if (decoded) {
-      console.log(
-        `payment-response: success ${String(decoded.success)}, network ${decoded.network ?? "absent"}, payer ${decoded.payer ?? "absent"}`,
-      );
-    } else if (paid.paymentResponse) {
-      console.log("payment-response header was present but was not JSON.");
-    } else {
-      console.log("payment-response header was absent.");
-    }
-    if (paid.costTia) {
-      const usd = paid.costUsd ? `, cost_usd ${paid.costUsd}` : "";
-      console.log(`houston cost_tia: ${formatTia(BigInt(paid.costTia))} TIA (${paid.costTia} wei)${usd}`);
-    }
-    if (paid.tiaCharged === null) {
-      console.log("settled TIA was not in the houston block or payment-response; tiaCharged is null. The quote is a ceiling, not the charge.");
-    } else {
-      console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge.`);
-    }
-    console.log("Local receipt written. Run `npm run post` to submit unposted lines to Mocha. That post is a testnet log, not revenue.");
+    logPaid(paid);
   } catch (error) {
     if (error instanceof PaidRequestError && error.depositTxHash) {
+      const note = error instanceof EdictaPaidError ? error.note : null;
       appendReceipt(cfg.receiptsPath, {
         type: "inference",
         requestId: quoted.accepted.extra.paymentId,
@@ -139,7 +213,9 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
         paymentHeaderSha256: null,
         quoteHeaderSha256: sha256Hex(quoted.header),
         dryRun: false,
+        ...edictaReceiptFields(note),
       });
+      if (note) clearEdictaPending(cfg.edictaPendingPath);
     }
     throw error;
   }

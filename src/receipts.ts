@@ -19,6 +19,17 @@ export type SaleReceipt = {
   note?: string;
 };
 
+/** Present only when a paid call went through Edicta. The gate Authorization bytes stay in the live trace. */
+export type EdictaNote = {
+  commitmentHash: string;
+  mode: "fast" | "strict";
+  /** Eden transaction hash of the signed deposit: 0x plus the signer rail_ref. */
+  railRef: string;
+  payer: string;
+  recorded: boolean;
+  authorizationSha256: string;
+};
+
 export type InferenceReceipt = {
   type: "inference";
   ts: string;
@@ -42,6 +53,8 @@ export type InferenceReceipt = {
   checkoutId?: string;
   /** Stripe PaymentIntent id for that session. The sale receipt stores the same id as `paymentId`. */
   stripePaymentId?: string | null;
+  /** Set when this call was committed through Edicta. Absent on the direct Houston path. */
+  edicta?: EdictaNote;
 };
 
 export type HumanReceipt = {
