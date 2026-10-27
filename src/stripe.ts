@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Config } from "./config.ts";
 import { fulfillCheckout } from "./fulfill.ts";
 import { claimJob, readJob, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
+import type { ReceiptPostDeps } from "./mocha.ts";
 import { gbpFromPence, penceFromGbp } from "./money.ts";
 import { appendReceipt, findByCheckout } from "./receipts.ts";
 
@@ -176,11 +177,15 @@ export function settleJobs(server: Server): Promise<void> {
 export type WebhookOptions = {
   fetchImpl?: typeof fetch;
   runJob?: (cfg: Config, job: Job) => Promise<void>;
+  /** Mocha submit used after a job finishes. Tests pass a fake helper here. */
+  postDeps?: ReceiptPostDeps;
 };
 
 export function startWebhook(cfg: Config, options: WebhookOptions = {}): Server {
   if (!cfg.stripeWebhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is required");
-  const runJob = options.runJob ?? ((config, job) => fulfillCheckout(config, job, options.fetchImpl));
+  const runJob =
+    options.runJob ??
+    ((config, job) => fulfillCheckout(config, job, options.fetchImpl ?? fetch, options.postDeps));
   const server = createServer((req, res) => {
     void (async () => {
       const url = req.url ?? "/";

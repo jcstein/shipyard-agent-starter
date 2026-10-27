@@ -18,5 +18,8 @@ server?.listen(cfg.webhookPort, "127.0.0.1", () => {
       : "DEMO_MODE=dry-run: a paid checkout uses mock inference and spends no TIA.",
   );
   console.log(`Job results are written to ${cfg.jobsPath}.`);
+  console.log(
+    "After a job finishes, unposted receipt lines are posted to Mocha. Fund the celestia1 address from `npm run celestia:address` at https://mocha.celenium.io/faucet.",
+  );
   console.log("Test-mode checkout.session.completed events are logged as sales with livemode false. They are not revenue.");
 });

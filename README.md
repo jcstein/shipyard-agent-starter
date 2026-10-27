@@ -41,12 +41,12 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | Command | What it does |
 | --- | --- |
 | `npm run preflight` | Reads the Eden address, TIA balance, and a fresh 402. Prints go or no-go. Does not sign or broadcast. |
-| `npm run demo` | Dry-run by default. `DEMO_MODE=live` pays for one completion. |
+| `npm run demo` | Dry-run by default (local mock post, no Mocha submit). `DEMO_MODE=live` pays for one completion and then posts unposted receipt lines to Mocha. |
 | `npm run celestia:build` | Builds the Mocha helper with Go 1.25.1. |
 | `npm run celestia:address` | Prints the celestia address to fund from the Mocha faucet. |
 | `npm run celestia:head` | Reads the public Mocha DA chain head. |
 | `npm run verify` | Checks the hash chain, prints GBP in and TIA out for a checkout job, and reads a real Mocha blob back when one was posted. |
-| `npm run post` | Submits unposted receipt lines with the Mocha helper. |
+| `npm run post` | Submits unposted receipt lines with the Mocha helper. Catch-up for lines an automatic post did not record in `posts.json`. |
 | `npm run checkout` | Creates a Stripe Checkout Session in the mode of your secret key. `npm run checkout -- --task "…"` stores the task on the session. |
 | `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt and runs the task. `GET /success` shows the result. `GET /cancel` answers a cancelled checkout. |
 | `npm run human -- --who "Ada" --what "paused spending" --why "quote was too high"` | Appends a `human` receipt. |
@@ -83,7 +83,7 @@ NativeEscrow is `0x65d77c98E73DFbEA91eCb72B27c9753e186a94c8` on Eden. The client
 
 The quote amount is a **ceiling**. `upto` means the facilitator can settle less and refund the rest. `tiaQuoted` on a receipt is that ceiling. `tiaCharged` is `houston.cost_tia` from the completion body when that field is a wei integer, and otherwise the `amount` on `payment-response` when that header has one. It is `null` when neither is present. Do not treat the ceiling as the cost, and do not treat either number as revenue.
 
-**Logs out.** `npm run post` batches receipt lines that are not in `posts.json` yet and submits one blob through the Go helper: the public Mocha core gRPC endpoint takes the PayForBlobs transaction, and the public DA endpoint reads the blob back before `posts.json` is written. `npm run verify` reads that blob again and checks the bytes match the local lines. Set `CELESTIA_RPC_URL` to send those calls to your own light node instead.
+**Logs out.** `npm run post` batches receipt lines that are not in `posts.json` yet and submits one blob through the Go helper: the public Mocha core gRPC endpoint takes the PayForBlobs transaction, and the public DA endpoint reads the blob back before `posts.json` is written. A finished checkout job and `DEMO_MODE=live npm run demo` call that same post. Dry-run `npm run demo` still writes a local mock post and does not contact Mocha. `npm run verify` reads a real blob again and checks the bytes match the local lines. Set `CELESTIA_RPC_URL` to send those calls to your own light node instead.
 
 ## Run a paid checkout
 
@@ -112,10 +112,10 @@ What you should see:
 - The browser lands on `/success?session_id=cs_…`. If you get there before the job finishes, the page says it is working on it and refreshes. When the job is done, the page shows the task and the result.
 - `jobs.json` (gitignored) has the same task, status, and result.
 - `receipts.jsonl` has the `sale` and the `inference`. Both carry the Checkout Session id. The inference `stripePaymentId` is the sale's `paymentId`.
+- After the job finishes, unposted receipt lines are submitted to Mocha. The terminal prints the blob height and commitment. That post needs faucet TIA on the `celestia1` address from `npm run celestia:address` ([https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet)). If the account has no TIA, the log says `insufficient funds` and names that command and faucet. The Stripe sale and the Houston job stay as they are. `npm run post` submits any lines still missing from `posts.json`. A Mocha blob is a testnet log, not revenue.
 - `npm run verify` prints the GBP amount and the TIA side for that session. In dry-run, TIA was not charged. Test mode is not revenue.
-- `npm run post` still submits receipt lines that are not in `posts.json` yet. A Mocha blob is a testnet log, not revenue.
 
-`DEMO_MODE=live` on the webhook process uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again.
+`DEMO_MODE=live` on the webhook process uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again. A finished live job posts its new receipt lines the same way.
 
 ## Spend cap
 
@@ -209,7 +209,9 @@ DEMO_MODE=live npm run demo
 
 If the paid retry is rejected and the flag was unset, stop. The error names the deposit transaction, the paymentId, and `refundAfter`. Do not start another live run to reuse that paymentId. A new run requests a new quote and would deposit again. NativeEscrow reverts a second `deposit` for a paymentId that was already used. The TIA stays in escrow until the facilitator settles it, or until `refundAfter`, when the buyer can call `refundExpired(paymentId)` on the escrow. Anyone can submit that call. The refund goes to the buyer. The quote amount is a ceiling, not a settled charge.
 
-Mocha faucet TIA funds the helper's celestia address so `npm run post` can publish a testnet log. It does not pay Houston Inference. The faucet is [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet). Using it does not entitle anyone to a mainnet airdrop.
+Mocha faucet TIA funds the helper's celestia address so a live demo, a finished checkout job, and `npm run post` can publish a testnet log. It does not pay Houston Inference. The faucet is [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet). Print the address with `npm run celestia:address` and fund that `celestia1` address before the post. Using the faucet does not entitle anyone to a mainnet airdrop.
+
+A live demo submits unposted receipt lines to Mocha after the completion is written. The terminal prints the height and commitment. Dry-run `npm run demo` records a local mock post only and does not submit to Mocha; `npm run post` skips those lines because `posts.json` already covers them. A failed Mocha post does not undo the Eden payment or the Stripe sale. The receipt lines stay on disk. `npm run post` retries lines that are not in `posts.json`.
 
 ## Post the log to Mocha
 

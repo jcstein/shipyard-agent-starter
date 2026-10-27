@@ -13,6 +13,7 @@ import {
   type ParsedQuote,
 } from "./houston.ts";
 import { sha256Hex } from "./hash.ts";
+import { postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
 import { appendReceipt, committedWei, readReceiptLines } from "./receipts.ts";
 import { openPaymentTrace, tracingFetch, type Tracer } from "./trace.ts";
@@ -22,7 +23,11 @@ const PROMPT =
 
 export const DEMO_MESSAGES: ChatMessage[] = [{ role: "user", content: PROMPT }];
 
-export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Promise<void> {
+export async function runDemo(
+  cfg: Config,
+  fetchImpl: typeof fetch = fetch,
+  postDeps: ReceiptPostDeps = {},
+): Promise<void> {
   if (cfg.mode === "live" && !cfg.privateKey) {
     throw new Error("DEMO_MODE=live requires EDEN_PRIVATE_KEY. The default dry-run spends nothing.");
   }
@@ -42,7 +47,7 @@ export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Pro
   }
 
   try {
-    await runQuoted(cfg, activeFetch);
+    await runQuoted(cfg, activeFetch, postDeps);
   } finally {
     if (tracer) {
       try {
@@ -55,7 +60,7 @@ export async function runDemo(cfg: Config, fetchImpl: typeof fetch = fetch): Pro
   }
 }
 
-async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
+async function runQuoted(cfg: Config, fetchImpl: typeof fetch, postDeps: ReceiptPostDeps): Promise<void> {
   const quoted = await fetchQuote({
     baseUrl: cfg.houstonBase,
     model: cfg.model,
@@ -123,7 +128,8 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch): Promise<void> {
     } else {
       console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge.`);
     }
-    console.log("Local receipt written. Run `npm run post` to submit unposted lines to Mocha. That post is a testnet log, not revenue.");
+    console.log("Local receipt written. Submitting unposted lines to Mocha. That post is a testnet log, not revenue.");
+    await postUnpostedReceipts(cfg, postDeps, "demo");
   } catch (error) {
     if (error instanceof PaidRequestError && error.depositTxHash) {
       appendReceipt(cfg.receiptsPath, {
@@ -207,6 +213,9 @@ function writeDryRun(cfg: Config, quote: ParsedQuote): void {
   console.log("");
   console.log(`mock Mocha post: lines ${post.lineStart}-${post.lineEnd}, payload sha256 ${post.payloadSha256}`);
   console.log("The mock post is local only. It is not a Celestia proof and it is not revenue.");
+  console.log(
+    "Dry-run records a local mock post only. It does not submit to Mocha, and `npm run post` skips these lines because posts.json already covers them.",
+  );
   console.log(`wrote ${cfg.receiptsPath} and ${cfg.postsPath}`);
   console.log(`quote header sha256: ${sha256Hex(quote.header)}`);
 }

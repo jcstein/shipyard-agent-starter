@@ -1,17 +1,19 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Interface, Wallet } from "ethers";
+import { readPostLog } from "../src/celestia.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import { NATIVE_ESCROW } from "../src/eden.ts";
 import { fulfillCheckout } from "../src/fulfill.ts";
 import { parsePaymentRequired, type ParsedQuote } from "../src/houston.ts";
 import { claimJob, readJob, renderSuccess, taskFromArgv, taskFromSession } from "../src/jobs.ts";
+import { postUnpostedReceipts, type HelperRun } from "../src/mocha.ts";
 import { appendReceipt, readReceiptLines } from "../src/receipts.ts";
 import { createCheckout, recordSale, settleJobs, startWebhook, stripePaymentId } from "../src/stripe.ts";
 import { describeCheckoutJobs, verifyReceipts } from "../src/verify.ts";
@@ -89,6 +91,34 @@ function call(
     req.end(payload);
   });
 }
+
+function scriptedHelper(failure?: string): { run: HelperRun; count: () => number } {
+  let count = 0;
+  let payload = "";
+  const commitment = Buffer.from("c".repeat(32)).toString("base64");
+  const run: HelperRun = async (request) => {
+    if (request.args[0] === "get") return { code: 0, stdout: Buffer.from(payload), stderr: "" };
+    count += 1;
+    payload = request.stdin?.toString("utf8") ?? "";
+    if (failure) return { code: 1, stdout: Buffer.alloc(0), stderr: failure };
+    return {
+      code: 0,
+      stdout: Buffer.from(
+        `${JSON.stringify({
+          height: 1847001,
+          commitment,
+          address: "celestia1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7y7k3e",
+          balance: "1000000utia",
+        })}\n`,
+      ),
+      stderr: "",
+    };
+  };
+  return { run, count: () => count };
+}
+
+const FUNDS_ERROR =
+  "insufficient funds: celestia1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7y7k3e balance 0utia. Fund this address at https://mocha.celenium.io/faucet\n";
 
 async function close(server: ReturnType<typeof startWebhook>): Promise<void> {
   await settleJobs(server);
@@ -227,13 +257,20 @@ describe("paid checkout", () => {
       DEMO_MODE: "dry-run",
     });
     let fetches = 0;
+    const helper = scriptedHelper();
+    const logs: string[] = [];
+    const originalLog = console.log;
     const server = startWebhook(cfg, {
       fetchImpl: async () => {
         fetches += 1;
         throw new Error("dry-run called the network");
       },
+      postDeps: { run: helper.run },
     });
     const port = await listen(server);
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(" "));
+    };
     try {
       const early = await call(port, "GET", "/success?session_id=cs_test_job");
       assert.match(early.body, /Working on it\. Refresh this page/);
@@ -293,16 +330,29 @@ describe("paid checkout", () => {
       assert.equal(page.body.includes("http-equiv"), false);
 
       const notes = await verifyReceipts(cfgEnv(cfg), async () => {
-        throw new Error("verify should not call Mocha");
-      }, async () => {
-        throw new Error("verify should not spawn the helper");
-      });
+        throw new Error("verify should not call Mocha over JSON-RPC");
+      }, helper.run);
       const text = notes.join("\n");
       assert.match(text, /£5.00 in \(livemode false, not revenue\)/);
       assert.match(text, /TIA not charged \(dry-run mock, no Houston call\)/);
       assert.match(text, /Stripe payment pi_test_job is on both receipts/);
-      assert.match(text, /No Mocha posts recorded/);
+      assert.match(text, /Mocha height 1847001/);
+      assert.equal(helper.count(), 1);
+      const posted = readPostLog(cfg.postsPath, cfg.namespaceId);
+      assert.equal(posted.posts.length, 1);
+      assert.equal(posted.posts[0]?.mock, false);
+      assert.equal(posted.posts[0]?.lineEnd, 2);
+      assert.match(logs.join("\n"), /height 1847001/);
+      assert.match(logs.join("\n"), /commitment /);
+      await postUnpostedReceipts(cfg, { run: helper.run });
+      if (!job) throw new Error("missing job");
+      await fulfillCheckout(cfg, job, async () => {
+        throw new Error("network was called");
+      }, { run: helper.run });
+      assert.equal(helper.count(), 1);
+      assert.equal(readPostLog(cfg.postsPath, cfg.namespaceId).posts.length, 1);
     } finally {
+      console.log = originalLog;
       await close(server);
     }
   });
@@ -421,7 +471,8 @@ describe("paid checkout", () => {
       STRIPE_WEBHOOK_SECRET: secret,
       SPEND_CAP_TIA: "0.05",
     });
-    const server = startWebhook(cfg, { fetchImpl });
+    const helper = scriptedHelper();
+    const server = startWebhook(cfg, { fetchImpl, postDeps: { run: helper.run } });
     const port = await listen(server);
     try {
       const raw = completedEvent({ id: "cs_test_live", paymentIntent: "pi_test_live", task: "name a price" });
@@ -439,6 +490,12 @@ describe("paid checkout", () => {
 
       assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
       assert.equal(calls.filter((url) => url.endsWith("/chat/completions")).length, 2);
+      assert.equal(helper.count(), 1);
+      const posted = readPostLog(cfg.postsPath, cfg.namespaceId);
+      assert.equal(posted.posts.length, 1);
+      assert.equal(posted.posts[0]?.mock, false);
+      assert.equal(posted.posts[0]?.height, 1847001);
+      assert.equal(posted.posts[0]?.lineEnd, 2);
       const lines = readReceiptLines(cfg.receiptsPath);
       assert.equal(lines.length, 2);
       const inference = JSON.parse(lines[1] ?? "") as {
@@ -464,6 +521,100 @@ describe("paid checkout", () => {
       assert.match(notes.join("\n"), /not revenue/);
       assert.match(notes.join("\n"), /pi_test_live is on both receipts/);
     } finally {
+      await close(server);
+    }
+  });
+
+  it("keeps the checkout when the Mocha post has insufficient funds", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "job-post-fail-"));
+    const wallet = Wallet.createRandom();
+    const secret = "whsec_test";
+    const fresh = freshQuote();
+    const txHash = `0x${"cd".repeat(32)}`;
+    const paymentResponse = Buffer.from(readFileSync(join(fixtureDir, "payment-response.json"), "utf8")).toString("base64");
+    const calls: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push(url);
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (url.endsWith("/chat/completions")) {
+        const chatCount = calls.filter((item) => item.endsWith("/chat/completions")).length;
+        const parsed = JSON.parse(body) as { messages?: Array<{ content?: string }> };
+        assert.equal(parsed.messages?.[0]?.content, "name a price");
+        if (chatCount === 1) return jsonResponse({ error: "Payment Required" }, 402, { "payment-required": fresh.header });
+        return jsonResponse(JSON.parse(readFileSync(join(fixtureDir, "paid-200.json"), "utf8")), 200, {
+          "payment-response": paymentResponse,
+        });
+      }
+      if (url.endsWith("/deposit/build")) return jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId });
+      if (url.endsWith("/deposit/send")) return jsonResponse({ txHash, paymentId: fresh.paymentId });
+      if (url.includes("/deposit/status/")) return jsonResponse({ txHash, status: "confirmed" });
+      throw new Error(`unexpected ${url}`);
+    };
+    const cfg = loadConfig({
+      DEMO_MODE: "live",
+      EDEN_PRIVATE_KEY: wallet.privateKey,
+      RECEIPTS_PATH: join(dir, "receipts.jsonl"),
+      POSTS_PATH: join(dir, "posts.json"),
+      JOBS_PATH: join(dir, "jobs.json"),
+      TRACE_DIR: join(dir, "traces"),
+      STRIPE_WEBHOOK_SECRET: secret,
+      SPEND_CAP_TIA: "0.05",
+    });
+    const helper = scriptedHelper(FUNDS_ERROR);
+    const errors: string[] = [];
+    const originalError = console.error;
+    const server = startWebhook(cfg, { fetchImpl, postDeps: { run: helper.run } });
+    const port = await listen(server);
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      const raw = completedEvent({ id: "cs_test_funds", paymentIntent: "pi_test_funds", task: "name a price" });
+      const post = async () => {
+        const signed = signedBody(secret, raw);
+        return call(port, "POST", "/webhook", signed.body, {
+          "content-type": "application/json",
+          "stripe-signature": signed.header,
+        });
+      };
+      const paid = await post();
+      assert.equal(paid.status, 200);
+      assert.deepEqual(JSON.parse(paid.body), { received: true, job: "started" });
+      await settleJobs(server);
+      const resent = await post();
+      assert.equal(resent.status, 200);
+      assert.deepEqual(JSON.parse(resent.body), { received: true, job: "exists" });
+      await settleJobs(server);
+
+      assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
+      assert.equal(calls.filter((url) => url.endsWith("/chat/completions")).length, 2);
+      assert.equal(helper.count(), 1);
+      assert.equal(existsSync(cfg.postsPath), false);
+      const lines = readReceiptLines(cfg.receiptsPath);
+      assert.equal(lines.length, 2);
+      assert.match(lines[1] ?? "", /"tiaCharged":"9147039588615"/);
+      const job = readJob(cfg.jobsPath, "cs_test_funds");
+      assert.equal(job?.status, "done");
+      assert.equal(job?.error, null);
+      const page = await call(port, "GET", "/success?session_id=cs_test_funds");
+      assert.equal(page.body.includes("The job failed"), false);
+      assert.match(page.body, /Houston inference finished/);
+      const text = errors.join("\n");
+      assert.match(text, /insufficient funds/);
+      assert.match(text, /npm run celestia:address/);
+      assert.match(text, /https:\/\/mocha\.celenium\.io\/faucet/);
+      assert.equal(text.includes("job cs_test_funds failed:"), false);
+
+      const catchUp = scriptedHelper();
+      await postUnpostedReceipts(cfg, { run: catchUp.run });
+      assert.equal(catchUp.count(), 1);
+      assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
+      assert.equal(readPostLog(cfg.postsPath, cfg.namespaceId).posts.length, 1);
+      await postUnpostedReceipts(cfg, { run: catchUp.run });
+      assert.equal(catchUp.count(), 1);
+    } finally {
+      console.error = originalError;
       await close(server);
     }
   });
@@ -498,6 +649,7 @@ describe("paid checkout", () => {
       DEMO_MODE: "live",
       EDEN_PRIVATE_KEY: Wallet.createRandom().privateKey,
       RECEIPTS_PATH: join(dir, "receipts.jsonl"),
+      POSTS_PATH: join(dir, "posts.json"),
       JOBS_PATH: join(dir, "jobs.json"),
     });
     appendReceipt(cfg.receiptsPath, {
@@ -538,9 +690,11 @@ describe("paid checkout", () => {
       livemode: true,
       dryRun: false,
     });
+    const helper = scriptedHelper();
     await fulfillCheckout(cfg, job, async () => {
       throw new Error("network was called");
-    });
+    }, { run: helper.run });
+    assert.equal(helper.count(), 1);
     const saved = readJob(cfg.jobsPath, "cs_test_prior");
     assert.equal(saved?.status, "done");
     assert.equal(readReceiptLines(cfg.receiptsPath).filter((line) => line.includes('"type":"inference"')).length, 1);
