@@ -62,28 +62,31 @@ function scrub(text: string, needles: string[]): string {
   return out;
 }
 
-function isSecretKey(key: string): boolean {
+function isSecretKey(key: string, parent: string | null): boolean {
   const flat = key.replace(/[_-]/g, "").toLowerCase();
-  return flat === "privatekey" || flat === "authorization" || flat === "cookie" || flat === "setcookie";
+  if (flat === "privatekey" || flat === "cookie" || flat === "setcookie") return true;
+  // HTTP Authorization is a credential. A JSON field named authorization is the
+  // gate Authorization, which the receipt stores only as a sha256.
+  return flat === "authorization" && parent === "headers";
 }
 
 /** Deep-copy `value`, removing private keys and other configured secrets. */
 export function redactSecrets<T>(value: T, secrets: string[]): T {
   const needles = secretNeedles(secrets);
-  const walk = (item: unknown): unknown => {
+  const walk = (item: unknown, parent: string | null): unknown => {
     if (typeof item === "string") return scrub(item, needles);
     if (typeof item === "number" || typeof item === "boolean" || item === null) return item;
-    if (Array.isArray(item)) return item.map(walk);
+    if (Array.isArray(item)) return item.map((child) => walk(child, parent));
     if (typeof item === "object" && item !== null) {
       const out: Record<string, unknown> = {};
       for (const [key, child] of Object.entries(item)) {
-        out[key] = isSecretKey(key) ? REDACTED : walk(child);
+        out[key] = isSecretKey(key, parent) ? REDACTED : walk(child, key);
       }
       return out;
     }
     return item;
   };
-  return walk(value) as T;
+  return walk(value, null) as T;
 }
 
 function headersToRecord(headers: HeadersInit | undefined): Record<string, string> {
