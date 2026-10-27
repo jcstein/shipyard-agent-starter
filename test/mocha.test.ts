@@ -3,10 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { blobPayload, readPostLog, writePostLog } from "../src/celestia.ts";
+import { blobPayload, readPostLog, v0Namespace, writePostLog } from "../src/celestia.ts";
 import { MOCHA_PUBLIC_CORE_GRPC, MOCHA_PUBLIC_RPC } from "../src/eden.ts";
 import { sha256Hex } from "../src/hash.ts";
-import { describePostFailure, getArgs, postReceipts, submitArgs, type HelperRun } from "../src/mocha.ts";
+import { describePostFailure, getArgs, mochaBlobUrl, postReceipts, submitArgs, type HelperRun } from "../src/mocha.ts";
 import { loadConfig } from "../src/config.ts";
 import { verifyReceipts } from "../src/verify.ts";
 
@@ -32,6 +32,16 @@ function paths() {
 }
 
 describe("mocha helper", () => {
+  it("links a posted blob on Celenium", () => {
+    const commitment = Buffer.from("c".repeat(32)).toString("base64");
+    const url = new URL(mochaBlobUrl(1847001, commitment, "shipyardmm"));
+    assert.equal(url.origin, "https://mocha.celenium.io");
+    assert.equal(url.pathname, "/blob");
+    assert.equal(url.searchParams.get("height"), "1847001");
+    assert.equal(url.searchParams.get("commitment"), commitment);
+    assert.equal(url.searchParams.get("hash"), v0Namespace("shipyardmm").toString("base64"));
+  });
+
   it("points an insufficient-funds failure at celestia:address and the faucet", () => {
     const text = describePostFailure(
       new Error(
@@ -72,7 +82,8 @@ describe("mocha helper", () => {
     assert.equal(seen?.args.includes("shipyardmm"), true);
     assert.equal(seen?.args.includes(MOCHA_PUBLIC_RPC), true);
     assert.equal(seen?.args.includes(MOCHA_PUBLIC_CORE_GRPC), true);
-    assert.match(notes.join("\n"), /height 1847001/);
+    const commitment = Buffer.from("c".repeat(32)).toString("base64");
+    assert.equal(notes.join("\n").includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, "shipyardmm")}`), true);
     assert.match(notes.join("\n"), /not revenue/);
     assert.match(notes.join("\n"), /Mnemonic saved/);
     const log = readPostLog(env.POSTS_PATH, "shipyardmm");
@@ -126,7 +137,7 @@ describe("mocha helper", () => {
       throw new Error("light-node path must not spawn the helper");
     };
     const notes = await postReceipts(env, { fetchImpl, run });
-    assert.match(notes.join("\n"), /height 42/);
+    assert.equal(notes.join("\n").includes(`height 42 ${mochaBlobUrl(42, commitment, "shipyardmm")}`), true);
     assert.equal(readPostLog(env.POSTS_PATH, "shipyardmm").posts[0]?.mock, false);
   });
 
@@ -157,7 +168,10 @@ describe("mocha helper", () => {
       throw new Error("helper path must not use fetch");
     }, run);
     assert.equal(sawGet, true);
-    assert.match(notes.join("\n"), /Mocha height 42/);
+    assert.equal(
+      notes.join("\n").includes(`Mocha height 42, commitment ${commitment} ${mochaBlobUrl(42, commitment, "shipyardmm")}`),
+      true,
+    );
     assert.match(notes.join("\n"), /not revenue/);
   });
 
@@ -187,6 +201,7 @@ describe("mocha helper", () => {
       },
     );
     assert.match(notes.join("\n"), /Mocha was not queried/);
+    assert.equal(notes.join("\n").includes("/blob?"), false);
     assert.equal(readFileSync(env.POSTS_PATH, "utf8").includes('"mock": true'), true);
   });
 });

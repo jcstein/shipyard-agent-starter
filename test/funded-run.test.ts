@@ -6,10 +6,10 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Interface, Wallet, getBytes } from "ethers";
 import { loadConfig, type Config } from "../src/config.ts";
-import { EDEN_RPC_URL, NATIVE_ESCROW } from "../src/eden.ts";
+import { EDEN_RPC_URL, NATIVE_ESCROW, edenTxUrl } from "../src/eden.ts";
 import { parsePaymentRequired, payAndComplete, recoverPersonalSigner, type ParsedQuote } from "../src/houston.ts";
 import { formatPreflight, runPreflight } from "../src/preflight.ts";
-import type { HelperRun } from "../src/mocha.ts";
+import { mochaBlobUrl, type HelperRun } from "../src/mocha.ts";
 import { runDemo } from "../src/run.ts";
 import { redactSecrets } from "../src/trace.ts";
 
@@ -526,8 +526,10 @@ describe("live trace", () => {
     assert.match(printed, /deprecation header \(true\)/);
     assert.match(printed, /payment-response: success true, network eip155:714, payer \[redacted\]/);
     assert.match(printed, /houston cost_tia: .* \(9147039588615 wei\), cost_usd \[redacted\]/);
-    assert.match(printed, /tiaCharged: 9147039588615 wei/);
-    assert.match(printed, /height 1847001/);
+    const commitment = Buffer.from("c".repeat(32)).toString("base64");
+    assert.equal(printed.includes(`deposit: ${txHash} ${edenTxUrl(txHash)}`), true);
+    assert.equal(printed.includes(`tiaCharged: 9147039588615 wei. The quote is a ceiling, not this charge. ${edenTxUrl(txHash)}`), true);
+    assert.equal(printed.includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, "shipyardmm")}`), true);
     assert.match(printed, /commitment /);
     const receipts = readFileSync(join(dir, "receipts.jsonl"), "utf8");
     assert.match(receipts, /"tiaCharged":"9147039588615"/);

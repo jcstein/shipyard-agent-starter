@@ -112,7 +112,7 @@ What you should see:
 - The browser lands on `/success?session_id=cs_…`. If you get there before the job finishes, the page says it is working on it and refreshes. When the job is done, the page shows the task and the result.
 - `jobs.json` (gitignored) has the same task, status, and result.
 - `receipts.jsonl` has the `sale` and the `inference`. Both carry the Checkout Session id. The inference `stripePaymentId` is the sale's `paymentId`.
-- After the job finishes, unposted receipt lines are submitted to Mocha. The terminal prints the blob height and commitment. That post needs faucet TIA on the `celestia1` address from `npm run celestia:address` ([https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet)). If the account has no TIA, the log says `insufficient funds` and names that command and faucet. The Stripe sale and the Houston job stay as they are. `npm run post` submits any lines still missing from `posts.json`. A Mocha blob is a testnet log, not revenue.
+- After the job finishes, unposted receipt lines are submitted to Mocha. The terminal prints the blob height, the commitment, and a [Celenium](https://mocha.celenium.io/) link for that blob on the height line. A live Houston job also prints the Eden deposit hash on the `deposit` and `tiaCharged` lines, with a [Blockscout](https://eden.blockscout.com) transaction link. Dry-run checkout uses mock inference, so it has no Eden deposit link. The post needs faucet TIA on the `celestia1` address from `npm run celestia:address` ([https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet)). If the account has no TIA, the log says `insufficient funds` and names that command and faucet. The Stripe sale and the Houston job stay as they are. `npm run post` submits any lines still missing from `posts.json`. A Mocha blob is a testnet log, not revenue.
 - `npm run verify` prints the GBP amount and the TIA side for that session. In dry-run, TIA was not charged. Test mode is not revenue.
 
 `DEMO_MODE=live` on the webhook process uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again. A finished live job posts its new receipt lines the same way.
@@ -144,6 +144,7 @@ See `.env.example`. The ones that matter:
 | `GBP_USD` | Optional USD per 1 GBP for that table. Unset reads CoinGecko. |
 | `HOUSTON_BASE_URL` | Default `https://inference.bot.fun/v1` |
 | `HOUSTON_MODEL` | Default `anthropic/claude-sonnet-5` |
+| `HOUSTON_MAX_TOKENS` | Completion cap (`max_tokens`). Default `128`, range 1–4096. 32 cuts off the one-sentence pitch. |
 | `HOUSTON_SIGN_FIELD` | `paymentId` (default). `nonce` signs the nonce first; the funded run rejected that signature. |
 | `HOUSTON_RETRY_OTHER_SIGN_FIELD` | `1` retries a signature mismatch once, on the other field, for the same paymentId. Unset does not. |
 | `EDEN_RPC_URL` | Balance RPC for preflight. Default `https://rpc.eden.gateway.fm/` |
@@ -205,13 +206,13 @@ DEMO_MODE=live npm run demo
 
 4. The trace is `traces/<timestamp>.json` (gitignored). It has the 402 response headers, including the raw `payment-required` base64, the `deposit/build` body, the `deposit/send` request and response bodies (including `deprecation` when Houston sends it), the deposit status body, and the paid retry request headers plus the response status, body, and headers, including `payment-response`. The private key is not in the file. The signed transaction and `Payment-Signature` are. Do not commit it.
 
-5. Read the log. A completion prints the decoded `payment-response` and `houston cost_tia` / `cost_usd`. The receipt stores `tiaCharged` from `cost_tia` when Houston returns it.
+5. Read the log. A completion prints the decoded `payment-response` and `houston cost_tia` / `cost_usd`. The `deposit` and `tiaCharged` lines include the Eden Blockscout URL for the deposit transaction. The receipt stores `tiaCharged` from `cost_tia` when Houston returns it.
 
 If the paid retry is rejected and the flag was unset, stop. The error names the deposit transaction, the paymentId, and `refundAfter`. Do not start another live run to reuse that paymentId. A new run requests a new quote and would deposit again. NativeEscrow reverts a second `deposit` for a paymentId that was already used. The TIA stays in escrow until the facilitator settles it, or until `refundAfter`, when the buyer can call `refundExpired(paymentId)` on the escrow. Anyone can submit that call. The refund goes to the buyer. The quote amount is a ceiling, not a settled charge.
 
 Mocha faucet TIA funds the helper's celestia address so a live demo, a finished checkout job, and `npm run post` can publish a testnet log. It does not pay Houston Inference. The faucet is [https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet). Print the address with `npm run celestia:address` and fund that `celestia1` address before the post. Using the faucet does not entitle anyone to a mainnet airdrop.
 
-A live demo submits unposted receipt lines to Mocha after the completion is written. The terminal prints the height and commitment. Dry-run `npm run demo` records a local mock post only and does not submit to Mocha; `npm run post` skips those lines because `posts.json` already covers them. A failed Mocha post does not undo the Eden payment or the Stripe sale. The receipt lines stay on disk. `npm run post` retries lines that are not in `posts.json`.
+A live demo submits unposted receipt lines to Mocha after the completion is written. The terminal prints the height, the commitment, and a Celenium link (`https://mocha.celenium.io/blob`) on the height line. Dry-run `npm run demo` records a local mock post only and does not submit to Mocha, so it does not print a Celenium blob link or an Eden transaction link. `npm run post` skips those lines because `posts.json` already covers them. A failed Mocha post does not undo the Eden payment or the Stripe sale. The receipt lines stay on disk. `npm run post` retries lines that are not in `posts.json`.
 
 ## Post the log to Mocha
 

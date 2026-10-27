@@ -1,4 +1,5 @@
 import type { Config } from "./config.ts";
+import { edenTxUrl } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import {
   assertFacilitatorSigned,
@@ -180,12 +181,16 @@ async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promis
       const money = job.livemode
         ? "Livemode true. Only an outside customer paying in live mode is revenue."
         : "Test mode is not revenue.";
+      const depositUrl = edenTxUrl(paid.depositTxHash);
       console.log(`job ${job.checkoutId} done. ${money}`);
       console.log(text);
+      console.log(`deposit: ${paid.depositTxHash} ${depositUrl}`);
       if (paid.tiaCharged === null) {
-        console.log("tiaCharged is null. The quote is a ceiling, not the charge.");
+        console.log(`tiaCharged is null. The quote is a ceiling, not the charge. ${depositUrl}`);
       } else {
-        console.log(`tiaCharged: ${formatTia(BigInt(paid.tiaCharged))} TIA (${paid.tiaCharged} wei). The quote is a ceiling, not this charge.`);
+        console.log(
+          `tiaCharged: ${formatTia(BigInt(paid.tiaCharged))} TIA (${paid.tiaCharged} wei). The quote is a ceiling, not this charge. ${depositUrl}`,
+        );
       }
     } catch (error) {
       if (error instanceof PaidRequestError && error.depositTxHash) {
