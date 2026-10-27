@@ -182,6 +182,36 @@ describe("success page", () => {
     assert.match(done, /Mock &lt;b&gt;result&lt;\/b&gt;/);
     assert.match(done, /No Houston call/);
     assert.equal(done.includes("http-equiv"), false);
+    assert.match(done, /name="viewport" content="width=device-width, initial-scale=1"/);
+    assert.match(done, /max-width:40rem/);
+    assert.match(done, /padding:1rem/);
+    assert.match(done, /white-space:normal/);
+    assert.match(done, /white-space:pre-wrap/);
+    assert.match(done, /overflow-wrap:anywhere/);
+    assert.equal(done.includes("ellipsis"), false);
+    assert.equal(done.includes("nowrap"), false);
+
+    const word = "business".repeat(40);
+    const long = renderSuccess({
+      sessionId: "cs_test_123",
+      job: {
+        checkoutId: "cs_test_123",
+        stripePaymentId: "pi_test_123",
+        task: `pitch ${word} this week`,
+        livemode: false,
+        dryRun: false,
+        status: "done",
+        result: `offer local small ${word}`,
+        error: null,
+        requestId: "req_1",
+        createdAt: "2026-10-24T00:00:00.000Z",
+        finishedAt: "2026-10-24T00:00:01.000Z",
+      },
+    });
+    assert.match(long, new RegExp(`pitch ${word} this week`));
+    assert.match(long, new RegExp(`offer local small ${word}`));
+    assert.match(long, /Houston inference finished/);
+    assert.match(long, /Test-mode payments are not revenue/);
   });
 });
 
