@@ -144,6 +144,7 @@ See `.env.example`. The ones that matter:
 | `GBP_USD` | Optional USD per 1 GBP for that table. Unset reads CoinGecko. |
 | `HOUSTON_BASE_URL` | Default `https://inference.bot.fun/v1` |
 | `HOUSTON_MODEL` | Default `anthropic/claude-sonnet-5` |
+| `HOUSTON_MAX_TOKENS` | Completion cap (`max_tokens`). Default `128`, range 1–4096. 32 cuts off the one-sentence pitch. |
 | `HOUSTON_SIGN_FIELD` | `paymentId` (default). `nonce` signs the nonce first; the funded run rejected that signature. |
 | `HOUSTON_RETRY_OTHER_SIGN_FIELD` | `1` retries a signature mismatch once, on the other field, for the same paymentId. Unset does not. |
 | `EDEN_RPC_URL` | Balance RPC for preflight. Default `https://rpc.eden.gateway.fm/` |

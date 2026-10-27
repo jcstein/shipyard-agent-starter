@@ -66,7 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const signField: SignField = env.HOUSTON_SIGN_FIELD === "nonce" ? "nonce" : "paymentId";
   const retryFlag = env.HOUSTON_RETRY_OTHER_SIGN_FIELD?.trim().toLowerCase() ?? "";
   const retryOtherSignField = retryFlag === "1" || retryFlag === "true" || retryFlag === "yes";
-  const maxTokens = Number(env.HOUSTON_MAX_TOKENS ?? "32");
+  const maxTokens = Number(env.HOUSTON_MAX_TOKENS ?? "128");
   if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4096) {
     throw new Error("HOUSTON_MAX_TOKENS must be an integer from 1 to 4096");
   }
