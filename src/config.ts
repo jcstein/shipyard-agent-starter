@@ -86,7 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     spendCapWei: parseTia(env.SPEND_CAP_TIA?.trim() || "0.05"),
     spendCapUsdWei: spendCapUsd ? parseUsd(spendCapUsd) : null,
     houstonBase: (env.HOUSTON_BASE_URL?.trim() || HOUSTON_INFERENCE).replace(/\/$/, ""),
-    model: env.HOUSTON_MODEL?.trim() || "qwen/qwen-flash",
+    model: env.HOUSTON_MODEL?.trim() || "anthropic/claude-sonnet-5",
     maxTokens,
     signField,
     retryOtherSignField,

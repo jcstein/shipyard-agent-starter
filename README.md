@@ -143,7 +143,7 @@ See `.env.example`. The ones that matter:
 | `BUDGET_GBP` | Pounds in the `npm run models` table. Default `20`. |
 | `GBP_USD` | Optional USD per 1 GBP for that table. Unset reads CoinGecko. |
 | `HOUSTON_BASE_URL` | Default `https://inference.bot.fun/v1` |
-| `HOUSTON_MODEL` | Default `qwen/qwen-flash` |
+| `HOUSTON_MODEL` | Default `anthropic/claude-sonnet-5` |
 | `HOUSTON_SIGN_FIELD` | `paymentId` (default). `nonce` signs the nonce first; the funded run rejected that signature. |
 | `HOUSTON_RETRY_OTHER_SIGN_FIELD` | `1` retries a signature mismatch once, on the other field, for the same paymentId. Unset does not. |
 | `EDEN_RPC_URL` | Balance RPC for preflight. Default `https://rpc.eden.gateway.fm/` |
