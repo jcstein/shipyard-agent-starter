@@ -11,6 +11,7 @@ import {
   type ChatMessage,
 } from "./houston.ts";
 import { updateJob, type Job } from "./jobs.ts";
+import { postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
 import { appendReceipt, committedWei, findByCheckout, readReceiptLines } from "./receipts.ts";
 import { openPaymentTrace, redactSecrets, tracingFetch, type Tracer } from "./trace.ts";
@@ -44,9 +45,16 @@ function finish(cfg: Config, job: Job, result: string, requestId: string, dryRun
  * Dry-run writes a mock result and does not call Houston.
  * Live uses the same quote, deposit, and Payment-Signature path as `npm run demo`.
  * A checkout that already has an inference receipt is not run again.
+ * After a successful finish, unposted receipt lines are submitted to Mocha.
+ * A Mocha failure is logged and does not change the job or the receipts.
  */
-export async function fulfillCheckout(cfg: Config, job: Job, fetchImpl: typeof fetch = fetch): Promise<void> {
-  await Promise.resolve();
+export async function fulfillCheckout(
+  cfg: Config,
+  job: Job,
+  fetchImpl: typeof fetch = fetch,
+  postDeps: ReceiptPostDeps = {},
+): Promise<void> {
+  let succeeded = false;
   try {
     updateJob(cfg.jobsPath, job.checkoutId, { status: "running" });
     const prior = findByCheckout(cfg.receiptsPath, "inference", job.checkoutId);
@@ -59,13 +67,16 @@ export async function fulfillCheckout(cfg: Config, job: Job, fetchImpl: typeof f
         prior.dryRun,
       );
       console.log(`job ${job.checkoutId} already has an inference receipt. Not running it again.`);
+      succeeded = true;
       return;
     }
     if (cfg.mode !== "live") {
       writeMock(cfg, job);
+      succeeded = true;
       return;
     }
     await writeLive(cfg, job, fetchImpl);
+    succeeded = true;
   } catch (error) {
     const message = safeError(cfg, error);
     try {
@@ -78,6 +89,8 @@ export async function fulfillCheckout(cfg: Config, job: Job, fetchImpl: typeof f
       console.error(writeError instanceof Error ? writeError.message : writeError);
     }
     console.error(`job ${job.checkoutId} failed: ${message}`);
+  } finally {
+    if (succeeded) await postUnpostedReceipts(cfg, postDeps, `job ${job.checkoutId}`);
   }
 }
 

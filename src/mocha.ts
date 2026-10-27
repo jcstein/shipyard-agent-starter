@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { blobPayload, mochaReadHint, readPostLog, submitReceiptBlob, unpostedLines, writePostLog } from "./celestia.ts";
 import { loadConfig, type Config } from "./config.ts";
-import { MOCHA_CHAIN } from "./eden.ts";
+import { MOCHA_CHAIN, MOCHA_FAUCET } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { readReceiptLines } from "./receipts.ts";
 
@@ -16,6 +16,12 @@ export type HelperRequest = {
 };
 
 export type HelperRun = (request: HelperRequest) => Promise<HelperResult>;
+
+/** Passed into checkout fulfillment and the live demo so tests can mock the helper. */
+export type ReceiptPostDeps = {
+  fetchImpl?: typeof fetch;
+  run?: HelperRun;
+};
 
 export function runMochaHelper(request: HelperRequest): Promise<HelperResult> {
   if (!existsSync(request.bin)) {
@@ -155,9 +161,9 @@ async function submitWithHelper(cfg: Config, lines: string[], run: HelperRun): P
 
 export async function postReceipts(
   env: NodeJS.ProcessEnv = process.env,
-  deps: { fetchImpl?: typeof fetch; run?: HelperRun } = {},
+  deps: ReceiptPostDeps & { cfg?: Config } = {},
 ): Promise<string[]> {
-  const cfg = loadConfig(env);
+  const cfg = deps.cfg ?? loadConfig(env);
   const lines = readReceiptLines(cfg.receiptsPath);
   const log = readPostLog(cfg.postsPath, cfg.namespaceId);
   if (log.namespaceId !== cfg.namespaceId) {
@@ -208,6 +214,31 @@ export async function postReceipts(
   }
   notes.push("Mocha is testnet. This blob is a log, not revenue.");
   return notes;
+}
+
+/** What to print when an automatic Mocha post fails. The receipt log is left as it is. */
+export function describePostFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const detail = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+  if (/insufficient funds/i.test(raw)) {
+    return `Mocha post failed: ${detail} Run \`npm run celestia:address\` and fund that celestia1 address at ${MOCHA_FAUCET}. Receipt lines already written were kept. Run \`npm run post\` after that address has faucet TIA.`;
+  }
+  return `Mocha post failed: ${detail} Receipt lines already written were kept. Run \`npm run post\` to submit unposted lines.`;
+}
+
+/**
+ * Submit receipt lines that are not in posts.json yet.
+ * Logs height and commitment on success. Logs a Mocha failure and does not throw,
+ * so a Stripe sale or Houston deposit that already succeeded stays recorded.
+ */
+export async function postUnpostedReceipts(cfg: Config, deps: ReceiptPostDeps = {}, label = ""): Promise<void> {
+  try {
+    const notes = await postReceipts(process.env, { fetchImpl: deps.fetchImpl, run: deps.run, cfg });
+    for (const note of notes) console.log(note);
+  } catch (error) {
+    const message = describePostFailure(error);
+    console.error(label ? `${label}: ${message}` : message);
+  }
 }
 
 export async function readReceiptBlob(cfg: Config, height: number, commitment: string, run: HelperRun): Promise<Buffer> {

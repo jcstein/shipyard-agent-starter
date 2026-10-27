@@ -36,7 +36,25 @@ describe("demo", () => {
       TRACE_DIR: join(dir, "traces"),
       SPEND_CAP_TIA: "0.05",
     };
-    await runDemo(loadConfig(env), quoteFetch());
+    let submits = 0;
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      logs.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await runDemo(loadConfig(env), quoteFetch(), {
+        run: async () => {
+          submits += 1;
+          throw new Error("dry-run must not submit to Mocha");
+        },
+      });
+    } finally {
+      console.log = original;
+    }
+    assert.equal(submits, 0);
+    assert.match(logs.join("\n"), /local mock post only/);
+    assert.match(logs.join("\n"), /does not submit to Mocha/);
     const receipts = readFileSync(env.RECEIPTS_PATH, "utf8");
     assert.equal(receipts.includes(fixture.accepts[0]?.extra.serverSignature ?? "missing"), false);
     assert.match(receipts, /"type":"inference"/);

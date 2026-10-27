@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadConfig } from "../src/config.ts";
+import type { HelperRun } from "../src/mocha.ts";
 import { readReceiptLines } from "../src/receipts.ts";
 import { createCheckout, recordSale, settleJobs, startWebhook, verifyStripeSignature, withCheckoutSessionId } from "../src/stripe.ts";
 
@@ -80,10 +81,18 @@ describe("stripe", () => {
     const secret = "whsec_test";
     const cfg = loadConfig({
       RECEIPTS_PATH: join(dir, "receipts.jsonl"),
+      POSTS_PATH: join(dir, "posts.json"),
       JOBS_PATH: join(dir, "jobs.json"),
       STRIPE_WEBHOOK_SECRET: secret,
     });
-    const server = startWebhook(cfg);
+    const run: HelperRun = async () => ({
+      code: 0,
+      stdout: Buffer.from(
+        `${JSON.stringify({ height: 9, commitment: Buffer.from("c".repeat(32)).toString("base64") })}\n`,
+      ),
+      stderr: "",
+    });
+    const server = startWebhook(cfg, { postDeps: { run } });
     const port = await new Promise<number>((resolve, reject) => {
       server.listen(0, "127.0.0.1", () => {
         const address = server.address();

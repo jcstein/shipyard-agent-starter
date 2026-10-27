@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { blobPayload, readPostLog, writePostLog } from "../src/celestia.ts";
 import { MOCHA_PUBLIC_CORE_GRPC, MOCHA_PUBLIC_RPC } from "../src/eden.ts";
 import { sha256Hex } from "../src/hash.ts";
-import { getArgs, postReceipts, submitArgs, type HelperRun } from "../src/mocha.ts";
+import { describePostFailure, getArgs, postReceipts, submitArgs, type HelperRun } from "../src/mocha.ts";
 import { loadConfig } from "../src/config.ts";
 import { verifyReceipts } from "../src/verify.ts";
 
@@ -32,6 +32,19 @@ function paths() {
 }
 
 describe("mocha helper", () => {
+  it("points an insufficient-funds failure at celestia:address and the faucet", () => {
+    const text = describePostFailure(
+      new Error(
+        "insufficient funds: celestia1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7y7k3e balance 0utia. Fund this address at https://mocha.celenium.io/faucet",
+      ),
+    );
+    assert.match(text, /insufficient funds/);
+    assert.match(text, /npm run celestia:address/);
+    assert.match(text, /https:\/\/mocha\.celenium\.io\/faucet/);
+    assert.match(text, /npm run post/);
+    assert.match(text, /already written were kept/);
+  });
+
   it("submits receipt bytes through the helper and records the commitment", async () => {
     const env = paths();
     const line = humanLine();

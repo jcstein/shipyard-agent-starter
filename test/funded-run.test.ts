@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -9,6 +9,7 @@ import { loadConfig, type Config } from "../src/config.ts";
 import { EDEN_RPC_URL, NATIVE_ESCROW } from "../src/eden.ts";
 import { parsePaymentRequired, payAndComplete, recoverPersonalSigner, type ParsedQuote } from "../src/houston.ts";
 import { formatPreflight, runPreflight } from "../src/preflight.ts";
+import type { HelperRun } from "../src/mocha.ts";
 import { runDemo } from "../src/run.ts";
 import { redactSecrets } from "../src/trace.ts";
 
@@ -464,11 +465,24 @@ describe("live trace", () => {
     console.log = (...args: unknown[]) => {
       notes.push(args.map((arg) => String(arg)).join(" "));
     };
+    let submits = 0;
+    const postRun: HelperRun = async (request) => {
+      submits += 1;
+      assert.equal(request.args[0], "submit");
+      return {
+        code: 0,
+        stdout: Buffer.from(
+          `${JSON.stringify({ height: 1847001, commitment: Buffer.from("c".repeat(32)).toString("base64") })}\n`,
+        ),
+        stderr: "",
+      };
+    };
     try {
-      await runDemo(config(dir, wallet.privateKey, { DEMO_MODE: "live" }), fetchImpl);
+      await runDemo(config(dir, wallet.privateKey, { DEMO_MODE: "live" }), fetchImpl, { run: postRun });
     } finally {
       console.log = original;
     }
+    assert.equal(submits, 1);
     const traces = readdirSync(join(dir, "traces"));
     assert.equal(traces.length, 1);
     const file = readFileSync(join(dir, "traces", traces[0] ?? ""), "utf8");
@@ -513,8 +527,62 @@ describe("live trace", () => {
     assert.match(printed, /payment-response: success true, network eip155:714, payer \[redacted\]/);
     assert.match(printed, /houston cost_tia: .* \(9147039588615 wei\), cost_usd \[redacted\]/);
     assert.match(printed, /tiaCharged: 9147039588615 wei/);
+    assert.match(printed, /height 1847001/);
+    assert.match(printed, /commitment /);
     const receipts = readFileSync(join(dir, "receipts.jsonl"), "utf8");
     assert.match(receipts, /"tiaCharged":"9147039588615"/);
     assert.equal(receipts.toLowerCase().includes(wallet.privateKey.slice(2).toLowerCase()), false);
+    const posts = JSON.parse(readFileSync(join(dir, "posts.json"), "utf8")) as { posts: Array<{ mock: boolean; height: number }> };
+    assert.equal(posts.posts[0]?.mock, false);
+    assert.equal(posts.posts[0]?.height, 1847001);
+  });
+
+  it("keeps the live receipt when the Mocha post has insufficient funds", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "demo-post-fail-"));
+    const wallet = Wallet.createRandom();
+    const fresh = freshQuote();
+    const txHash = `0x${"ab".repeat(32)}`;
+    const paymentResponse = Buffer.from(readFileSync(join(fixtureDir, "payment-response.json"), "utf8")).toString("base64");
+    const calls: string[] = [];
+    let chats = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/chat/completions")) {
+        chats += 1;
+        if (chats === 1) return jsonResponse({ error: "Payment Required" }, 402, { "payment-required": fresh.header });
+        return jsonResponse(fixtureJson("paid-200.json"), 200, { "payment-response": paymentResponse });
+      }
+      if (url.endsWith("/deposit/build")) return jsonResponse({ txData: fresh.tx, paymentId: fresh.paymentId });
+      if (url.endsWith("/deposit/send")) return depositSend(fresh, txHash);
+      if (url.includes("/deposit/status/")) return depositStatus(txHash);
+      throw new Error(`unexpected ${url}`);
+    };
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await runDemo(config(dir, wallet.privateKey, { DEMO_MODE: "live" }), fetchImpl, {
+        run: async () => ({
+          code: 1,
+          stdout: Buffer.alloc(0),
+          stderr:
+            "insufficient funds: celestia1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7y7k3e balance 0utia. Fund this address at https://mocha.celenium.io/faucet\n",
+        }),
+      });
+    } finally {
+      console.error = original;
+    }
+    assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
+    assert.equal(chats, 2);
+    assert.match(readFileSync(join(dir, "receipts.jsonl"), "utf8"), /"dryRun":false/);
+    assert.equal(existsSync(join(dir, "posts.json")), false);
+    const text = errors.join("\n");
+    assert.match(text, /insufficient funds/);
+    assert.match(text, /npm run celestia:address/);
+    assert.match(text, /https:\/\/mocha\.celenium\.io\/faucet/);
+    assert.match(text, /npm run post/);
   });
 });
