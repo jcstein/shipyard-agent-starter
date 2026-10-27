@@ -55,6 +55,8 @@ describe("demo", () => {
     assert.equal(submits, 0);
     assert.match(logs.join("\n"), /local mock post only/);
     assert.match(logs.join("\n"), /does not submit to Mocha/);
+    assert.equal(logs.join("\n").includes("/blob?"), false);
+    assert.equal(logs.join("\n").includes("/tx/"), false);
     const receipts = readFileSync(env.RECEIPTS_PATH, "utf8");
     assert.equal(receipts.includes(fixture.accepts[0]?.extra.serverSignature ?? "missing"), false);
     assert.match(receipts, /"type":"inference"/);
@@ -73,6 +75,7 @@ describe("demo", () => {
     );
     assert.match(notes.join("\n"), /mock/);
     assert.match(notes.join("\n"), /not revenue/);
+    assert.equal(notes.join("\n").includes("/blob?"), false);
     assert.equal(existsSync(env.TRACE_DIR), false);
   });
 

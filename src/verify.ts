@@ -1,6 +1,6 @@
 import { blobPayload, fetchReceiptBlob, localPostMatches, readPostLog } from "./celestia.ts";
 import { loadConfig } from "./config.ts";
-import { readReceiptBlob, runMochaHelper, type HelperRun } from "./mocha.ts";
+import { mochaBlobUrl, readReceiptBlob, runMochaHelper, type HelperRun } from "./mocha.ts";
 import { formatTia } from "./money.ts";
 import { readReceiptLines, verifyHashChain } from "./receipts.ts";
 
@@ -120,7 +120,7 @@ export async function verifyReceipts(
       throw new Error(`Post ${index + 1} blob at height ${post.height} does not match the local receipt lines`);
     }
     notes.push(
-      `Post ${index + 1}: Mocha height ${post.height}, commitment ${post.commitment}, blob matches the local lines. This is a testnet log, not revenue.`,
+      `Post ${index + 1}: Mocha height ${post.height}, commitment ${post.commitment} ${mochaBlobUrl(post.height, post.commitment, cfg.namespaceId)}, blob matches the local lines. This is a testnet log, not revenue.`,
     );
   }
   return notes;

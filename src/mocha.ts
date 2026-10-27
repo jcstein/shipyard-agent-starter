@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { blobPayload, mochaReadHint, readPostLog, submitReceiptBlob, unpostedLines, writePostLog } from "./celestia.ts";
+import { blobPayload, mochaReadHint, readPostLog, submitReceiptBlob, unpostedLines, v0Namespace, writePostLog } from "./celestia.ts";
 import { loadConfig, type Config } from "./config.ts";
-import { MOCHA_CHAIN, MOCHA_FAUCET } from "./eden.ts";
+import { MOCHA_CHAIN, MOCHA_EXPLORER, MOCHA_FAUCET } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { readReceiptLines } from "./receipts.ts";
 
@@ -22,6 +22,16 @@ export type ReceiptPostDeps = {
   fetchImpl?: typeof fetch;
   run?: HelperRun;
 };
+
+/** Celenium page for a posted Mocha blob. `hash` is the 29-byte v0 namespace. */
+export function mochaBlobUrl(height: number, commitment: string, namespaceId: string): string {
+  const params = new URLSearchParams({
+    commitment,
+    hash: v0Namespace(namespaceId).toString("base64"),
+    height: String(height),
+  });
+  return `${MOCHA_EXPLORER}/blob?${params.toString()}`;
+}
 
 export function runMochaHelper(request: HelperRequest): Promise<HelperResult> {
   if (!existsSync(request.bin)) {
@@ -200,7 +210,7 @@ export async function postReceipts(
   writePostLog(cfg.postsPath, log);
   const notes = [
     `Submitted ${pending.lines.length} lines to Mocha (${cfg.namespaceId}).`,
-    `height ${posted.height}`,
+    `height ${posted.height} ${mochaBlobUrl(posted.height, posted.commitment, cfg.namespaceId)}`,
     `commitment ${posted.commitment}`,
   ];
   const helperAddress = "address" in posted && typeof posted.address === "string" ? posted.address : "";

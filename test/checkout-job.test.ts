@@ -9,11 +9,11 @@ import { fileURLToPath } from "node:url";
 import { Interface, Wallet } from "ethers";
 import { readPostLog } from "../src/celestia.ts";
 import { loadConfig, type Config } from "../src/config.ts";
-import { NATIVE_ESCROW } from "../src/eden.ts";
+import { NATIVE_ESCROW, edenTxUrl } from "../src/eden.ts";
 import { fulfillCheckout } from "../src/fulfill.ts";
 import { parsePaymentRequired, type ParsedQuote } from "../src/houston.ts";
 import { claimJob, readJob, renderSuccess, taskFromArgv, taskFromSession } from "../src/jobs.ts";
-import { postUnpostedReceipts, type HelperRun } from "../src/mocha.ts";
+import { mochaBlobUrl, postUnpostedReceipts, type HelperRun } from "../src/mocha.ts";
 import { appendReceipt, readReceiptLines } from "../src/receipts.ts";
 import { createCheckout, recordSale, settleJobs, startWebhook, stripePaymentId } from "../src/stripe.ts";
 import { describeCheckoutJobs, verifyReceipts } from "../src/verify.ts";
@@ -342,8 +342,14 @@ describe("paid checkout", () => {
       assert.equal(posted.posts.length, 1);
       assert.equal(posted.posts[0]?.mock, false);
       assert.equal(posted.posts[0]?.lineEnd, 2);
-      assert.match(logs.join("\n"), /height 1847001/);
+      const commitment = Buffer.from("c".repeat(32)).toString("base64");
+      assert.equal(logs.join("\n").includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`), true);
       assert.match(logs.join("\n"), /commitment /);
+      assert.equal(logs.join("\n").includes("/tx/"), false);
+      assert.equal(
+        text.includes(`Mocha height 1847001, commitment ${commitment} ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`),
+        true,
+      );
       await postUnpostedReceipts(cfg, { run: helper.run });
       if (!job) throw new Error("missing job");
       await fulfillCheckout(cfg, job, async () => {
@@ -483,43 +489,63 @@ describe("paid checkout", () => {
           "stripe-signature": signed.header,
         });
       };
-      assert.equal(JSON.parse((await post()).body).job, "started");
-      await settleJobs(server);
-      assert.equal(JSON.parse((await post()).body).job, "exists");
-      await settleJobs(server);
-
-      assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
-      assert.equal(calls.filter((url) => url.endsWith("/chat/completions")).length, 2);
-      assert.equal(helper.count(), 1);
-      const posted = readPostLog(cfg.postsPath, cfg.namespaceId);
-      assert.equal(posted.posts.length, 1);
-      assert.equal(posted.posts[0]?.mock, false);
-      assert.equal(posted.posts[0]?.height, 1847001);
-      assert.equal(posted.posts[0]?.lineEnd, 2);
-      const lines = readReceiptLines(cfg.receiptsPath);
-      assert.equal(lines.length, 2);
-      const inference = JSON.parse(lines[1] ?? "") as {
-        dryRun: boolean;
-        tiaCharged: string;
-        checkoutId: string;
-        stripePaymentId: string;
-        requestId: string;
+      const logs: string[] = [];
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => {
+        logs.push(args.map((arg) => String(arg)).join(" "));
       };
-      assert.equal(inference.dryRun, false);
-      assert.equal(inference.tiaCharged, "9147039588615");
-      assert.equal(inference.checkoutId, "cs_test_live");
-      assert.equal(inference.stripePaymentId, "pi_test_live");
-      assert.equal(inference.requestId, fresh.paymentId);
-      const job = readJob(cfg.jobsPath, "cs_test_live");
-      assert.equal(job?.status, "done");
-      assert.equal(job?.result, "[redacted]");
-      const dumped = `${readFileSync(cfg.jobsPath, "utf8")}\n${readFileSync(cfg.receiptsPath, "utf8")}`;
-      assert.equal(dumped.toLowerCase().includes(wallet.privateKey.slice(2).toLowerCase()), false);
-      const notes = describeCheckoutJobs(lines);
-      assert.match(notes.join("\n"), /TIA charged/);
-      assert.match(notes.join("\n"), /9147039588615 wei/);
-      assert.match(notes.join("\n"), /not revenue/);
-      assert.match(notes.join("\n"), /pi_test_live is on both receipts/);
+      try {
+        assert.equal(JSON.parse((await post()).body).job, "started");
+        await settleJobs(server);
+        assert.equal(JSON.parse((await post()).body).job, "exists");
+        await settleJobs(server);
+
+        const commitment = Buffer.from("c".repeat(32)).toString("base64");
+        const printed = logs.join("\n");
+        assert.equal(printed.includes(`deposit: ${txHash} ${edenTxUrl(txHash)}`), true);
+        assert.equal(
+          printed.includes(
+            `tiaCharged: 0.000009147039588615 TIA (9147039588615 wei). The quote is a ceiling, not this charge. ${edenTxUrl(txHash)}`,
+          ),
+          true,
+        );
+        assert.equal(printed.includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`), true);
+
+        assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
+        assert.equal(calls.filter((url) => url.endsWith("/chat/completions")).length, 2);
+        assert.equal(helper.count(), 1);
+        const posted = readPostLog(cfg.postsPath, cfg.namespaceId);
+        assert.equal(posted.posts.length, 1);
+        assert.equal(posted.posts[0]?.mock, false);
+        assert.equal(posted.posts[0]?.height, 1847001);
+        assert.equal(posted.posts[0]?.lineEnd, 2);
+        const lines = readReceiptLines(cfg.receiptsPath);
+        assert.equal(lines.length, 2);
+        const inference = JSON.parse(lines[1] ?? "") as {
+          dryRun: boolean;
+          tiaCharged: string;
+          checkoutId: string;
+          stripePaymentId: string;
+          requestId: string;
+        };
+        assert.equal(inference.dryRun, false);
+        assert.equal(inference.tiaCharged, "9147039588615");
+        assert.equal(inference.checkoutId, "cs_test_live");
+        assert.equal(inference.stripePaymentId, "pi_test_live");
+        assert.equal(inference.requestId, fresh.paymentId);
+        const job = readJob(cfg.jobsPath, "cs_test_live");
+        assert.equal(job?.status, "done");
+        assert.equal(job?.result, "[redacted]");
+        const dumped = `${readFileSync(cfg.jobsPath, "utf8")}\n${readFileSync(cfg.receiptsPath, "utf8")}`;
+        assert.equal(dumped.toLowerCase().includes(wallet.privateKey.slice(2).toLowerCase()), false);
+        const notes = describeCheckoutJobs(lines);
+        assert.match(notes.join("\n"), /TIA charged/);
+        assert.match(notes.join("\n"), /9147039588615 wei/);
+        assert.match(notes.join("\n"), /not revenue/);
+        assert.match(notes.join("\n"), /pi_test_live is on both receipts/);
+      } finally {
+        console.log = originalLog;
+      }
     } finally {
       await close(server);
     }

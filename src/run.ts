@@ -12,6 +12,7 @@ import {
   type ChatMessage,
   type ParsedQuote,
 } from "./houston.ts";
+import { edenTxUrl } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
@@ -106,7 +107,7 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch, postDeps: Receipt
       dryRun: false,
     });
     console.log(`model: ${text}`);
-    console.log(`deposit: ${paid.depositTxHash}`);
+    console.log(`deposit: ${paid.depositTxHash} ${edenTxUrl(paid.depositTxHash)}`);
     console.log(`payment signature field: ${paid.signFieldUsed}`);
     console.log(`payment header sha256: ${paymentHeaderSha256(paid.paymentHeader)}`);
     const decoded = paid.paymentResponseDecoded;
@@ -123,10 +124,13 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch, postDeps: Receipt
       const usd = paid.costUsd ? `, cost_usd ${paid.costUsd}` : "";
       console.log(`houston cost_tia: ${formatTia(BigInt(paid.costTia))} TIA (${paid.costTia} wei)${usd}`);
     }
+    const depositUrl = edenTxUrl(paid.depositTxHash);
     if (paid.tiaCharged === null) {
-      console.log("settled TIA was not in the houston block or payment-response; tiaCharged is null. The quote is a ceiling, not the charge.");
+      console.log(
+        `settled TIA was not in the houston block or payment-response; tiaCharged is null. The quote is a ceiling, not the charge. ${depositUrl}`,
+      );
     } else {
-      console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge.`);
+      console.log(`tiaCharged: ${paid.tiaCharged} wei. The quote is a ceiling, not this charge. ${depositUrl}`);
     }
     console.log("Local receipt written. Submitting unposted lines to Mocha. That post is a testnet log, not revenue.");
     await postUnpostedReceipts(cfg, postDeps, "demo");

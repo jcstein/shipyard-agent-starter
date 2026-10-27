@@ -1,7 +1,7 @@
 import { getBytes, hashMessage, Interface, recoverAddress, Wallet } from "ethers";
 import type { Config, SignField } from "./config.ts";
 import { assertPrivateKey } from "./config.ts";
-import { EDEN_CHAIN_ID, EDEN_NETWORK, EXPLORER } from "./eden.ts";
+import { EDEN_CHAIN_ID, EDEN_NETWORK, EXPLORER, edenTxUrl } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { assertWithinCap, formatTia, formatUsd, quoteUsd } from "./money.ts";
 import { isTraceFetch } from "./trace.ts";
@@ -245,7 +245,7 @@ export function paymentRejectionInstructions(input: {
   const escrow = input.quote.accepted.extra.escrowContract;
   const lines = [
     input.detail,
-    `The deposit ${input.depositTxHash} is already in NativeEscrow for paymentId ${paymentId}.`,
+    `The deposit ${input.depositTxHash} ${edenTxUrl(input.depositTxHash)} is already in NativeEscrow for paymentId ${paymentId}.`,
     `A second deposit for this paymentId reverts on-chain ("payment id already used"). Do not start another live run to reuse it. A new live run requests a new quote and would deposit again.`,
     `This attempt signed ${input.tried}.`,
   ];
@@ -627,7 +627,7 @@ export async function payAndComplete(input: {
     if (error instanceof PaidRequestError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new PaidRequestError(
-      `${message} The deposit is ${depositTxHash}. Do not deposit this paymentId again.`,
+      `${message} The deposit is ${depositTxHash} ${edenTxUrl(depositTxHash)}. Do not deposit this paymentId again.`,
       depositTxHash,
     );
   }
