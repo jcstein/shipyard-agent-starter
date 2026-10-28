@@ -17,6 +17,7 @@
     "celestia:head": "node --env-file-if-exists=.env src/celestia-cmd.ts head",
     "checkout": "node --env-file-if-exists=.env src/checkout.ts",
     "webhook": "node --env-file-if-exists=.env src/webhook.ts",
+    "live": "node --env-file-if-exists=.env src/live.ts",
     "human": "node --env-file-if-exists=.env src/human.ts",
     "models": "node --env-file-if-exists=.env src/models.ts",
     "typecheck": "tsc --noEmit",
