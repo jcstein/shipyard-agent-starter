@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 import { loadConfig, type Config } from "../src/config.ts";
 import {
   checkoutConfig,
+  formatForwardedLiveLine,
   listenFailureMessage,
   parseListenSecret,
   startLive,
@@ -17,6 +18,7 @@ import {
   webhookChildArgs,
   webhookChildEnv,
   type LiveChild,
+  type LiveForwardState,
   type LiveSpawnOptions,
 } from "../src/live.ts";
 import { verifyStripeSignature } from "../src/stripe.ts";
@@ -209,6 +211,48 @@ describe("stripe listen secret", () => {
   });
 });
 
+describe("live log filter", () => {
+  function state(): LiveForwardState {
+    return { explorers: new Set() };
+  }
+
+  it("keeps paid, Houston, and Mocha, and prints each explorer once", () => {
+    const seen = state();
+    const eden = `https://eden.blockscout.com/tx/0x${"cd".repeat(32)}`;
+    const blob = "https://mocha.celenium.io/blob?height=9&commitment=abc";
+    assert.equal(formatForwardedLiveLine("stripe", READY, seen), null);
+    assert.equal(
+      formatForwardedLiveLine("stripe", "2026-10-28   --> checkout.session.completed [evt_whsec_nope]", seen),
+      null,
+    );
+    assert.equal(formatForwardedLiveLine("webhook", "Stripe webhook listening on http://127.0.0.1:8787/webhook", seen), null);
+    assert.equal(formatForwardedLiveLine("webhook", "paid cs_test £5.00. Test mode is not revenue.", seen), "paid cs_test £5.00. Test mode is not revenue.");
+    assert.equal(formatForwardedLiveLine("webhook", "Houston: paying for inference on Eden", seen), "Houston: paying for inference on Eden");
+    assert.equal(formatForwardedLiveLine("webhook", `deposit: 0x${"cd".repeat(32)} ${eden}`, seen), `deposit: 0x${"cd".repeat(32)} ${eden}`);
+    assert.equal(
+      formatForwardedLiveLine("webhook", `tiaCharged: 1 wei. The quote is a ceiling, not this charge. ${eden}`, seen),
+      "tiaCharged: 1 wei. The quote is a ceiling, not this charge.",
+    );
+    assert.equal(formatForwardedLiveLine("webhook", `height 9 ${blob}`, seen), `height 9 ${blob}`);
+    assert.equal(formatForwardedLiveLine("webhook", "commitment abc", seen), null);
+    assert.equal(formatForwardedLiveLine("webhook", "trace: traces/x.json", seen), null);
+    assert.equal(formatForwardedLiveLine("webhook", `height 9 ${blob}`, seen), "height 9");
+  });
+
+  it("keeps failures and stderr, and still hides the signing secret", () => {
+    const seen = state();
+    assert.equal(formatForwardedLiveLine("stripe", "Expired API Key provided", seen, true), "Expired API Key provided");
+    assert.equal(formatForwardedLiveLine("webhook", "job cs_test failed: boom", seen, true), "job cs_test failed: boom");
+    assert.match(formatForwardedLiveLine("webhook", "Mocha post failed: insufficient funds", seen) ?? "", /insufficient funds/);
+    assert.equal(formatForwardedLiveLine("stripe", READY, seen, true), null);
+    assert.equal(
+      formatForwardedLiveLine("webhook", "/tmp/demo/.env not found. Continuing without it.", seen, true),
+      null,
+    );
+    assert.equal(formatForwardedLiveLine("webhook", "Paid retry rejected the paymentId signature. No second deposit.", seen), "Paid retry rejected the paymentId signature. No second deposit.");
+  });
+});
+
 describe("npm run live", () => {
   it("starts listen, passes a split whsec to the webhook, and prints the checkout URL", async () => {
     const envBody = "STRIPE_WEBHOOK_SECRET=whsec_from_dotenv\nDEMO_MODE=dry-run\n";
@@ -241,18 +285,43 @@ describe("npm run live", () => {
     assert.equal(run.spawned.length, 2);
 
     webhook.child.pushOut("Stripe webhook listening on http://127.0.0.1:9090/webhook\n");
+    webhook.child.pushOut("Job results are written to jobs.json.\n");
     await new Promise((resolve) => setImmediate(resolve));
     const opened = run.checkout();
     assert.equal(opened.checkoutCfg?.stripeWebhookSecret, "whsec_splitSecret123");
     assert.equal(opened.checkoutCfg?.mode, "live");
     assert.equal(opened.checkoutCfg?.successUrl, "http://localhost:9090/success");
     assert.equal(opened.checkoutTask, "name a service");
+    const eden = `https://eden.blockscout.com/tx/0x${"ab".repeat(32)}`;
+    const mocha = "https://mocha.celenium.io/blob?height=1847001&commitment=abc";
+    webhook.child.pushOut("paid cs_test_live £5.00. Test mode is not revenue.\n");
+    webhook.child.pushOut("Houston: paying for inference on Eden\n");
+    webhook.child.pushOut("Houston: a one-sentence pitch\n");
+    webhook.child.pushOut(`deposit: 0x${"ab".repeat(32)} ${eden}\n`);
+    webhook.child.pushOut(`tiaCharged: 1 wei. The quote is a ceiling, not this charge. ${eden}\n`);
+    webhook.child.pushOut(`height 1847001 ${mocha}\n`);
+    webhook.child.pushOut("commitment abc\n");
+    webhook.child.pushOut("trace: traces/example.json\n");
+    webhook.child.pushErr("job cs_test_live failed: insufficient funds\n");
     const text = run.logs.join("\n");
-    assert.match(text, /\[stripe\] Ready!/);
-    assert.match(text, /\[webhook\] Stripe webhook listening/);
+    assert.equal(text.includes("Ready!"), false);
+    assert.equal(text.includes("whsec_"), false);
+    assert.equal(text.includes("[stripe]"), false);
+    assert.equal(text.includes("[webhook]"), false);
+    assert.equal(text.includes("Stripe webhook listening"), false);
+    assert.equal(text.includes("Job results are written"), false);
+    assert.doesNotMatch(text, /^commitment /m);
+    assert.equal(text.includes("trace:"), false);
+    assert.match(text, /paid cs_test_live £5\.00/);
+    assert.match(text, /Houston: paying for inference on Eden/);
+    assert.match(text, /Houston: a one-sentence pitch/);
     assert.match(text, /https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_live/);
     assert.match(text, /4242 4242 4242 4242/);
     assert.match(text, /\.env was not changed/);
+    assert.equal(text.split(eden).length - 1, 1);
+    assert.equal(text.split(mocha).length - 1, 1);
+    assert.match(text, /tiaCharged: 1 wei\. The quote is a ceiling, not this charge\./);
+    assert.match(run.errors.join("\n"), /insufficient funds/);
     assert.equal(readFileSync(join(run.dir, ".env"), "utf8"), envBody);
 
     run.session.stop();
@@ -335,7 +404,7 @@ describe("npm run live", () => {
     webhook.die(1);
     assert.equal(await run.session.done, 1);
     assert.match(run.errors.join("\n"), /exited before it was listening/);
-    assert.match(run.logs.join("\n"), /EADDRINUSE/);
+    assert.match(run.errors.join("\n"), /EADDRINUSE/);
     assert.equal(run.spawned[0]?.child.signals[0], "SIGTERM");
   });
 
@@ -421,7 +490,9 @@ setInterval(() => {}, 1000);
       while (!logs.some((line) => line.includes("cs_test_real")) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      assert.match(logs.join("\n"), /Stripe webhook listening on http:\/\/127\.0\.0\.1:18787\/webhook/);
+      assert.equal(logs.join("\n").includes("Stripe webhook listening"), false);
+      assert.equal(logs.join("\n").includes("whsec_"), false);
+      assert.match(logs.join("\n"), /\.env was not changed/);
       assert.match(logs.join("\n"), /https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_real/);
       assert.equal(openedSecret, "whsec_fromreal");
       const webhookPid = pids[1];

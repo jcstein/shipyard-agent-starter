@@ -33,6 +33,38 @@ export function mochaBlobUrl(height: number, commitment: string, namespaceId: st
   return `${MOCHA_EXPLORER}/blob?${params.toString()}`;
 }
 
+/** Celenium URL for the blob that contains this checkout's inference line. Null when none was posted. */
+export function mochaBlobUrlForCheckout(cfg: Config, checkoutId: string): string | null {
+  const lines = readReceiptLines(cfg.receiptsPath);
+  let index = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line) continue;
+    let event: { type?: unknown; checkoutId?: unknown };
+    try {
+      event = JSON.parse(line) as { type?: unknown; checkoutId?: unknown };
+    } catch {
+      continue;
+    }
+    if (event.type === "inference" && event.checkoutId === checkoutId) index = i;
+  }
+  if (index < 0) return null;
+  let log;
+  try {
+    log = readPostLog(cfg.postsPath, cfg.namespaceId);
+  } catch {
+    return null;
+  }
+  for (let i = log.posts.length - 1; i >= 0; i -= 1) {
+    const post = log.posts[i];
+    if (!post || post.mock || post.height === null || !post.commitment) continue;
+    if (post.lineStart <= index && index < post.lineEnd) {
+      return mochaBlobUrl(post.height, post.commitment, cfg.namespaceId);
+    }
+  }
+  return null;
+}
+
 export function runMochaHelper(request: HelperRequest): Promise<HelperResult> {
   if (!existsSync(request.bin)) {
     return Promise.reject(new Error(`Mocha helper not found at ${request.bin}. ${mochaReadHint()}`));

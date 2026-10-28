@@ -242,6 +242,63 @@ describe("success page", () => {
     assert.match(long, new RegExp(`offer local small ${word}`));
     assert.match(long, /Houston inference finished/);
     assert.match(long, /Test-mode payments are not revenue/);
+    assert.equal(long.includes("Celenium"), false);
+    assert.equal(long.includes("Blockscout"), false);
+  });
+
+  it("shows explorer links that exist and omits the ones that do not", () => {
+    const job = {
+      checkoutId: "cs_test_123",
+      stripePaymentId: "pi_test_123",
+      task: "haiku",
+      livemode: false,
+      dryRun: false,
+      status: "done" as const,
+      result: "a pitch",
+      error: null,
+      requestId: "req_1",
+      createdAt: "2026-10-24T00:00:00.000Z",
+      finishedAt: "2026-10-24T00:00:01.000Z",
+      linksReady: true,
+    };
+    const mochaUrl = "https://mocha.celenium.io/blob?height=1847001&commitment=abc";
+    const edenUrl = `https://eden.blockscout.com/tx/0x${"ab".repeat(32)}`;
+    const both = renderSuccess({ sessionId: "cs_test_123", job, links: { mochaUrl, edenUrl } });
+    assert.match(both, /Celenium Mocha blob/);
+    assert.match(both, /Eden Blockscout/);
+    assert.match(both, /mocha\.celenium\.io\/blob\?height=1847001&amp;commitment=abc/);
+    assert.match(both, new RegExp(`eden\\.blockscout\\.com\\/tx\\/0x${"ab".repeat(32)}`));
+    assert.equal(both.includes("http-equiv"), false);
+    assert.equal(both.includes("Posting the receipt"), false);
+
+    const edenOnly = renderSuccess({ sessionId: "cs_test_123", job, links: { mochaUrl: null, edenUrl } });
+    assert.match(edenOnly, /Eden Blockscout/);
+    assert.equal(edenOnly.includes("Celenium"), false);
+    assert.equal(edenOnly.includes("celenium"), false);
+
+    const neither = renderSuccess({ sessionId: "cs_test_123", job, links: { mochaUrl: null, edenUrl: null } });
+    assert.equal(neither.includes("Celenium"), false);
+    assert.equal(neither.includes("Blockscout"), false);
+    assert.equal(neither.includes("href="), false);
+
+    const waiting = renderSuccess({
+      sessionId: "cs_test_123",
+      job: { ...job, linksReady: false },
+      links: { mochaUrl: null, edenUrl },
+    });
+    assert.match(waiting, /http-equiv="refresh"/);
+    assert.match(waiting, /Posting the receipt to Mocha/);
+    assert.match(waiting, /Eden Blockscout/);
+    assert.equal(waiting.includes("Celenium"), false);
+
+    const running = renderSuccess({
+      sessionId: "cs_test_123",
+      job: { ...job, status: "running", linksReady: false, result: null, finishedAt: null },
+      links: { mochaUrl, edenUrl },
+    });
+    assert.match(running, /Working on it/);
+    assert.equal(running.includes("Celenium"), false);
+    assert.equal(running.includes("Blockscout"), false);
   });
 });
 
@@ -328,6 +385,11 @@ describe("paid checkout", () => {
       assert.match(page.body, /Mock inference/);
       assert.match(page.body, /not revenue/);
       assert.equal(page.body.includes("http-equiv"), false);
+      assert.match(page.body, /Celenium Mocha blob/);
+      assert.match(page.body, /mocha\.celenium\.io\/blob/);
+      assert.match(page.body, /1847001/);
+      assert.equal(page.body.includes("Eden Blockscout"), false);
+      assert.equal(page.body.includes("/tx/"), false);
 
       const notes = await verifyReceipts(cfgEnv(cfg), async () => {
         throw new Error("verify should not call Mocha over JSON-RPC");
@@ -343,8 +405,11 @@ describe("paid checkout", () => {
       assert.equal(posted.posts[0]?.mock, false);
       assert.equal(posted.posts[0]?.lineEnd, 2);
       const commitment = Buffer.from("c".repeat(32)).toString("base64");
-      assert.equal(logs.join("\n").includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`), true);
-      assert.match(logs.join("\n"), /commitment /);
+      const printed = logs.join("\n");
+      assert.match(printed, /paid cs_test_job £5\.00\. Test mode is not revenue\./);
+      assert.match(printed, /Result: Mock inference/);
+      assert.equal(printed.includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`), true);
+      assert.match(printed, /commitment /);
       assert.equal(logs.join("\n").includes("/tx/"), false);
       assert.equal(
         text.includes(`Mocha height 1847001, commitment ${commitment} ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`),
@@ -502,14 +567,20 @@ describe("paid checkout", () => {
 
         const commitment = Buffer.from("c".repeat(32)).toString("base64");
         const printed = logs.join("\n");
+        const blobUrl = mochaBlobUrl(1847001, commitment, cfg.namespaceId);
+        assert.match(printed, /paid cs_test_live £5\.00\. Test mode is not revenue\./);
+        assert.match(printed, /Houston: paying for inference on Eden/);
+        assert.match(printed, /Houston: \[redacted\]/);
         assert.equal(printed.includes(`deposit: ${txHash} ${edenTxUrl(txHash)}`), true);
+        assert.equal(printed.split(edenTxUrl(txHash)).length - 1, 1);
         assert.equal(
           printed.includes(
-            `tiaCharged: 0.000009147039588615 TIA (9147039588615 wei). The quote is a ceiling, not this charge. ${edenTxUrl(txHash)}`,
+            "tiaCharged: 0.000009147039588615 TIA (9147039588615 wei). The quote is a ceiling, not this charge.",
           ),
           true,
         );
-        assert.equal(printed.includes(`height 1847001 ${mochaBlobUrl(1847001, commitment, cfg.namespaceId)}`), true);
+        assert.equal(printed.includes(`height 1847001 ${blobUrl}`), true);
+        assert.equal(printed.split(blobUrl).length - 1, 1);
 
         assert.equal(calls.filter((url) => url.endsWith("/deposit/send")).length, 1);
         assert.equal(calls.filter((url) => url.endsWith("/chat/completions")).length, 2);
@@ -536,6 +607,16 @@ describe("paid checkout", () => {
         const job = readJob(cfg.jobsPath, "cs_test_live");
         assert.equal(job?.status, "done");
         assert.equal(job?.result, "[redacted]");
+        assert.equal(job?.linksReady, true);
+        const page = await call(port, "GET", "/success?session_id=cs_test_live");
+        assert.match(page.body, /Houston inference finished/);
+        assert.match(page.body, /Celenium Mocha blob/);
+        assert.match(page.body, /mocha\.celenium\.io\/blob/);
+        assert.match(page.body, /1847001/);
+        assert.match(page.body, /Eden Blockscout/);
+        assert.match(page.body, new RegExp(`eden\\.blockscout\\.com\\/tx\\/${txHash}`));
+        assert.equal(page.body.includes("http-equiv"), false);
+        assert.equal(page.body.includes("Posting the receipt"), false);
         const dumped = `${readFileSync(cfg.jobsPath, "utf8")}\n${readFileSync(cfg.receiptsPath, "utf8")}`;
         assert.equal(dumped.toLowerCase().includes(wallet.privateKey.slice(2).toLowerCase()), false);
         const notes = describeCheckoutJobs(lines);
@@ -626,6 +707,11 @@ describe("paid checkout", () => {
       const page = await call(port, "GET", "/success?session_id=cs_test_funds");
       assert.equal(page.body.includes("The job failed"), false);
       assert.match(page.body, /Houston inference finished/);
+      assert.match(page.body, /Eden Blockscout/);
+      assert.match(page.body, new RegExp(`eden\\.blockscout\\.com\\/tx\\/${txHash}`));
+      assert.equal(page.body.includes("Celenium Mocha blob"), false);
+      assert.equal(page.body.includes("/blob?"), false);
+      assert.equal(page.body.includes("http-equiv"), false);
       const text = errors.join("\n");
       assert.match(text, /insufficient funds/);
       assert.match(text, /npm run celestia:address/);

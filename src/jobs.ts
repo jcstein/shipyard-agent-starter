@@ -20,6 +20,11 @@ export type Job = {
   requestId: string | null;
   createdAt: string;
   finishedAt: string | null;
+  /**
+   * False once the job result is saved, until the Mocha post attempt finishes.
+   * The success page refreshes only while this is false. Absent on older jobs.
+   */
+  linksReady?: boolean;
 };
 
 export type JobLog = {
@@ -153,8 +158,21 @@ function revenueLine(livemode: boolean | null): string {
   return "Test-mode payments are not revenue.";
 }
 
+export type SuccessLinks = {
+  /** Celenium page for the Mocha blob that includes this checkout. Omit when absent. */
+  mochaUrl?: string | null;
+  /** Eden Blockscout page for the Houston deposit. Omit when this job did not deposit. */
+  edenUrl?: string | null;
+};
+
+function explorerParagraph(label: string, url: string | null | undefined): string {
+  if (!url) return "";
+  const safe = escapeHtml(url);
+  return `<p>${label}: <a href="${safe}">${safe}</a></p>`;
+}
+
 /** HTML for GET /success. A missing or unfinished job asks the browser to refresh. */
-export function renderSuccess(input: { sessionId: string | null; job: Job | null }): string {
+export function renderSuccess(input: { sessionId: string | null; job: Job | null; links?: SuccessLinks }): string {
   const title = "Payment received";
   if (!input.sessionId) {
     return page(title, `<h1>${title}</h1><p>Payment received.</p><p>${revenueLine(false)}</p>`);
@@ -177,9 +195,14 @@ export function renderSuccess(input: { sessionId: string | null; job: Job | null
   const kind = job.dryRun
     ? "Mock inference. No Houston call was made and no TIA was spent."
     : "Houston inference finished.";
+  const waiting =
+    job.linksReady === false ? `<meta http-equiv="refresh" content="2"><p>Posting the receipt to Mocha.</p>` : "";
+  const links =
+    explorerParagraph("Celenium Mocha blob", input.links?.mochaUrl) +
+    explorerParagraph("Eden Blockscout", input.links?.edenUrl);
   return page(
     title,
-    `<h1>${title}</h1><p>Task</p><pre>${escapeHtml(job.task)}</pre><p>Result</p><pre>${escapeHtml(job.result ?? "")}</pre><p>${kind}</p><p>${revenueLine(job.livemode)}</p>`,
+    `${waiting}<h1>${title}</h1><p>Task</p><pre>${escapeHtml(job.task)}</pre><p>Result</p><pre>${escapeHtml(job.result ?? "")}</pre><p>${kind}</p>${links}<p>${revenueLine(job.livemode)}</p>`,
   );
 }
 
