@@ -76,6 +76,56 @@ export function modeLine(mode: DemoMode): string {
     : "DEMO_MODE=dry-run: a paid checkout uses mock inference and spends no TIA.";
 }
 
+/** Webhook lines that carry the workshop story. Everything else from a healthy run is dropped. */
+const WEBHOOK_STORY = /^(?:paid |Houston:|Result:|deposit:|tiaCharged|height |job )/;
+const EXPLORER_URL = "https:\\/\\/(?:eden\\.blockscout\\.com\\/tx\\/[^\\s)]+|mocha\\.celenium\\.io\\/blob\\?[^\\s)]+)";
+
+export function isLiveFailure(line: string): boolean {
+  return /\b(fail(?:ed|ure)?|error|insufficient|rejected|EADDRINUSE|timed out|exception)\b/i.test(line);
+}
+
+function isSigningSecretLine(line: string): boolean {
+  return parseListenSecret(line) !== null || /webhook signing secret/i.test(line);
+}
+
+/** Node prints this when `--env-file-if-exists` has nothing to load. The webhook still starts. */
+function isOptionalEnvNotice(line: string): boolean {
+  return /\.env not found\. Continuing without it\./.test(line);
+}
+
+export type LiveForwardState = { explorers: Set<string> };
+
+function dedupeExplorers(line: string, state: LiveForwardState): string | null {
+  const next = line
+    .replace(new RegExp(EXPLORER_URL, "g"), (url) => {
+      if (state.explorers.has(url)) return "";
+      state.explorers.add(url);
+      return url;
+    })
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return next.length === 0 ? null : next;
+}
+
+/**
+ * What `npm run live` prints from a child.
+ * The story is paid, then Houston, then Mocha. Each explorer URL is printed once.
+ * The listen signing secret stays off the terminal. Failures and child stderr are kept.
+ */
+export function formatForwardedLiveLine(
+  source: "stripe" | "webhook",
+  line: string,
+  state: LiveForwardState,
+  stderr = false,
+): string | null {
+  const plain = stripAnsi(line).trim();
+  if (!plain || isSigningSecretLine(plain) || isOptionalEnvNotice(plain)) return null;
+  if (stderr || isLiveFailure(plain)) return dedupeExplorers(plain, state);
+  if (source === "stripe") return null;
+  if (!WEBHOOK_STORY.test(plain)) return null;
+  return dedupeExplorers(plain, state);
+}
+
 export function listenFailureMessage(output: string, missingBinary: boolean): string {
   if (missingBinary) {
     return "Stripe CLI was not found on PATH. Install it from https://docs.stripe.com/stripe-cli, run `stripe login`, then run `npm run live` again.";
@@ -161,6 +211,7 @@ function signalChild(child: LiveChild, signal: NodeJS.Signals): void {
 /**
  * One terminal: `stripe listen`, the existing webhook (with the listen secret), and a Checkout URL.
  * DEMO_MODE is passed through, so `live` still runs Houston and the Mocha post.
+ * Child output is trimmed to paid, Houston, and Mocha. The whsec_ value is captured and not printed.
  */
 export function startLive(input: StartLiveInput): LiveSession {
   const log = input.log ?? ((line: string) => console.log(line));
@@ -190,6 +241,7 @@ export function startLive(input: StartLiveInput): LiveSession {
   const children: LiveChild[] = [];
   const exited = new Set<LiveChild>();
   const flushers: Array<() => void> = [];
+  const forwardState: LiveForwardState = { explorers: new Set() };
 
   let resolveDone: (code: number) => void = () => {};
   const done = new Promise<number>((resolve) => {
@@ -205,9 +257,11 @@ export function startLive(input: StartLiveInput): LiveSession {
     listenOutput = (listenOutput + stripAnsi(text)).slice(-8_000);
   }
 
-  function logLine(tag: string, line: string): void {
-    if (line.trim().length === 0) return;
-    log(`${tag} ${line}`);
+  function emitForwarded(source: "stripe" | "webhook", line: string, stderr: boolean): void {
+    const shown = formatForwardedLiveLine(source, line, forwardState, stderr);
+    if (!shown) return;
+    if (stderr || isLiveFailure(line)) errorLog(shown);
+    else log(shown);
   }
 
   function maybeDone(): void {
@@ -261,9 +315,9 @@ export function startLive(input: StartLiveInput): LiveSession {
     });
   }
 
-  function onListenLine(line: string): void {
-    logLine("[stripe]", line);
+  function onListenLine(line: string, stderr: boolean): void {
     remember(`${line}\n`);
+    emitForwarded("stripe", line, stderr);
     if (gotSecret || settled) return;
     const secret = parseListenSecret(line);
     if (!secret) return;
@@ -289,16 +343,16 @@ export function startLive(input: StartLiveInput): LiveSession {
       return;
     }
     watch(child, "webhook");
-    const onWebhookLine = (line: string) => {
-      logLine("[webhook]", line);
-      if (webhookReady || settled) return;
-      if (!stripAnsi(line).includes(WEBHOOK_READY_PREFIX)) return;
-      webhookReady = true;
-      if (timers.ready) clearTimeout(timers.ready);
-      void openSession(sessionCfg);
+    const onWebhookLine = (line: string, stderr: boolean) => {
+      if (!webhookReady && !settled && stripAnsi(line).includes(WEBHOOK_READY_PREFIX)) {
+        webhookReady = true;
+        if (timers.ready) clearTimeout(timers.ready);
+        void openSession(sessionCfg);
+      }
+      emitForwarded("webhook", line, stderr);
     };
-    watchStream(child.stdout, onWebhookLine);
-    watchStream(child.stderr, onWebhookLine);
+    watchStream(child.stdout, (line) => onWebhookLine(line, false));
+    watchStream(child.stderr, (line) => onWebhookLine(line, true));
     timers.ready = setTimeout(() => {
       flushStreams();
       if (settled || webhookReady) return;
@@ -404,8 +458,8 @@ export function startLive(input: StartLiveInput): LiveSession {
     return { done, stop: () => finish(0) };
   }
   watch(listenChild, "listen");
-  watchStream(listenChild.stdout, onListenLine);
-  watchStream(listenChild.stderr, onListenLine);
+  watchStream(listenChild.stdout, (line) => onListenLine(line, false));
+  watchStream(listenChild.stderr, (line) => onListenLine(line, true));
   timers.secret = setTimeout(() => {
     flushStreams();
     if (settled || gotSecret) return;

@@ -32,7 +32,10 @@ describe("HOUSTON_MAX_TOKENS", () => {
   it("matches the documented default", () => {
     const example = readFileSync(join(root, ".env.example"), "utf8");
     const readme = readFileSync(join(root, "README.md"), "utf8");
-    assert.match(example, /^HOUSTON_MAX_TOKENS=128$/m);
-    assert.match(readme, /`HOUSTON_MAX_TOKENS` \| Completion cap \(`max_tokens`\)\. Default `128`, range 1–4096\./);
+    assert.match(example, /^HOUSTON_MAX_TOKENS=256$/m);
+    assert.match(
+      readme,
+      /`HOUSTON_MAX_TOKENS` \| Completion cap \(`max_tokens`\)\. Unset defaults to `128`, range 1–4096\. `\.env\.example` sets `256`\./,
+    );
   });
 });

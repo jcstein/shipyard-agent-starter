@@ -12,7 +12,7 @@ import {
   type ChatMessage,
 } from "./houston.ts";
 import { updateJob, type Job } from "./jobs.ts";
-import { postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
+import { mochaBlobUrlForCheckout, postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
 import { appendReceipt, committedWei, findByCheckout, readReceiptLines } from "./receipts.ts";
 import { openPaymentTrace, redactSecrets, tracingFetch, type Tracer } from "./trace.ts";
@@ -38,7 +38,27 @@ function finish(cfg: Config, job: Job, result: string, requestId: string, dryRun
     requestId,
     dryRun,
     finishedAt: new Date().toISOString(),
+    linksReady: false,
   });
+}
+
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** Links for GET /success. Either URL is null when that explorer page does not exist yet. */
+export function successExplorerLinks(
+  cfg: Config,
+  checkoutId: string,
+): { mochaUrl: string | null; edenUrl: string | null } {
+  try {
+    const inference = findByCheckout(cfg.receiptsPath, "inference", checkoutId);
+    const hash = inference && inference.type === "inference" ? inference.depositTxHash : null;
+    const edenUrl = hash && /^0x[0-9a-fA-F]{64}$/.test(hash) ? edenTxUrl(hash) : null;
+    return { mochaUrl: mochaBlobUrlForCheckout(cfg, checkoutId), edenUrl };
+  } catch {
+    return { mochaUrl: null, edenUrl: null };
+  }
 }
 
 /**
@@ -91,7 +111,13 @@ export async function fulfillCheckout(
     }
     console.error(`job ${job.checkoutId} failed: ${message}`);
   } finally {
-    if (succeeded) await postUnpostedReceipts(cfg, postDeps, `job ${job.checkoutId}`);
+    if (!succeeded) return;
+    await postUnpostedReceipts(cfg, postDeps, `job ${job.checkoutId}`);
+    try {
+      updateJob(cfg.jobsPath, job.checkoutId, { linksReady: true });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+    }
   }
 }
 
@@ -116,7 +142,7 @@ function writeMock(cfg: Config, job: Job): void {
   });
   finish(cfg, job, text, requestId, true);
   console.log(`job ${job.checkoutId} done. Mock inference, no TIA spent. Test-mode payments are not revenue.`);
-  console.log(text);
+  console.log(`Result: ${oneLine(text)}`);
 }
 
 async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promise<void> {
@@ -133,6 +159,7 @@ async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promis
     ),
   });
   const activeFetch = tracingFetch(fetchImpl, tracer);
+  console.log("Houston: paying for inference on Eden");
   try {
     const quoted = await fetchQuote({
       baseUrl: cfg.houstonBase,
@@ -178,18 +205,14 @@ async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promis
         stripePaymentId: job.stripePaymentId,
       });
       finish(cfg, job, text, quoted.accepted.extra.paymentId, false);
-      const money = job.livemode
-        ? "Livemode true. Only an outside customer paying in live mode is revenue."
-        : "Test mode is not revenue.";
       const depositUrl = edenTxUrl(paid.depositTxHash);
-      console.log(`job ${job.checkoutId} done. ${money}`);
-      console.log(text);
+      console.log(`Houston: ${oneLine(text)}`);
       console.log(`deposit: ${paid.depositTxHash} ${depositUrl}`);
       if (paid.tiaCharged === null) {
-        console.log(`tiaCharged is null. The quote is a ceiling, not the charge. ${depositUrl}`);
+        console.log("tiaCharged is null. The quote is a ceiling, not the charge.");
       } else {
         console.log(
-          `tiaCharged: ${formatTia(BigInt(paid.tiaCharged))} TIA (${paid.tiaCharged} wei). The quote is a ceiling, not this charge. ${depositUrl}`,
+          `tiaCharged: ${formatTia(BigInt(paid.tiaCharged))} TIA (${paid.tiaCharged} wei). The quote is a ceiling, not this charge.`,
         );
       }
     } catch (error) {

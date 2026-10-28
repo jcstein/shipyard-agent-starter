@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Config } from "./config.ts";
-import { fulfillCheckout } from "./fulfill.ts";
+import { fulfillCheckout, successExplorerLinks } from "./fulfill.ts";
 import { claimJob, readJob, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
 import type { ReceiptPostDeps } from "./mocha.ts";
 import { gbpFromPence, penceFromGbp } from "./money.ts";
@@ -193,7 +193,8 @@ export function startWebhook(cfg: Config, options: WebhookOptions = {}): Server 
       if (req.method === "GET" && path === "/success") {
         const sessionId = sessionIdFrom(url);
         const job = sessionId ? readJob(cfg.jobsPath, sessionId) : null;
-        const html = renderSuccess({ sessionId, job });
+        const links = job?.status === "done" ? successExplorerLinks(cfg, job.checkoutId) : undefined;
+        const html = renderSuccess({ sessionId, job, links });
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
         res.end(html);
         return;
@@ -232,6 +233,14 @@ export function startWebhook(cfg: Config, options: WebhookOptions = {}): Server 
         livemode: session.livemode === true,
         dryRun: cfg.mode !== "live",
       });
+      if (claimed) {
+        const amount = gbpFromPence(session.amount_total ?? 0);
+        const revenue =
+          session.livemode === true
+            ? "Livemode true. Only an outside customer paying in live mode is revenue."
+            : "Test mode is not revenue.";
+        console.log(`paid ${session.id} £${amount}. ${revenue}`);
+      }
       // Stripe times out a slow 200, and a Houston deposit can take longer than that.
       // The claim is already on disk, so a resent event cannot start a second job.
       send(res, 200, { received: true, job: claimed ? "started" : "exists" });
