@@ -49,6 +49,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | `npm run post` | Submits unposted receipt lines with the Mocha helper. Catch-up for lines an automatic post did not record in `posts.json`. |
 | `npm run checkout` | Creates a Stripe Checkout Session in the mode of your secret key. `npm run checkout -- --task "…"` stores the task on the session. |
 | `npm run webhook` | `POST /webhook` on `127.0.0.1:8787`. A completed checkout writes a `sale` receipt and runs the task. `GET /success` shows the result. `GET /cancel` answers a cancelled checkout. |
+| `npm run live` | One terminal for that checkout. Starts `stripe listen`, passes the printed `whsec_…` to the webhook, and prints the Checkout URL. `Ctrl-C` stops both. |
 | `npm run human -- --who "Ada" --what "paused spending" --why "quote was too high"` | Appends a `human` receipt. |
 | `npm run models` | Fetches Houston's model list and prints what the GBP budget buys at the live USD rate. |
 | `npm test` | Offline tests. |
@@ -56,7 +57,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 
 ## Money flow
 
-**GBP in.** `npm run checkout` opens a Stripe Checkout Session priced in GBP. The session sets `managed_payments[enabled]=false`, so a new account (Managed Payments is on by default) does not need a product tax code. The task is `metadata.task` when you pass `--task`, or the Checkout custom field when the customer types one (that typed value wins). Point Stripe at the webhook (`stripe listen --events checkout.session.completed --forward-to localhost:8787/webhook`, or the dashboard). `checkout.session.completed` appends a `sale` with the checkout id, payment intent id, amount, `GBP`, your customer ref (`client_reference_id`), and the task. The handler answers 200, then runs the task once. A resent event does not write a second sale and does not run the job again. `livemode: false` means a test-mode event. Test cards are not revenue. A live-mode charge from an outside customer is. Stripe then redirects the browser to `GET /success?session_id={CHECKOUT_SESSION_ID}`. If the job is still running, the page says it is working on it. Refresh to see the result. The steps are in [Run a paid checkout](#run-a-paid-checkout).
+**GBP in.** `npm run checkout` opens a Stripe Checkout Session priced in GBP. The session sets `managed_payments[enabled]=false`, so a new account (Managed Payments is on by default) does not need a product tax code. The task is `metadata.task` when you pass `--task`, or the Checkout custom field when the customer types one (that typed value wins). Point Stripe at the webhook with `npm run live` (it reads the `whsec_…` from `stripe listen`), or run listen yourself. `checkout.session.completed` appends a `sale` with the checkout id, payment intent id, amount, `GBP`, your customer ref (`client_reference_id`), and the task. The handler answers 200, then runs the task once. A resent event does not write a second sale and does not run the job again. `livemode: false` means a test-mode event. Test cards are not revenue. A live-mode charge from an outside customer is. Stripe then redirects the browser to `GET /success?session_id={CHECKOUT_SESSION_ID}`. If the job is still running, the page says it is working on it. Refresh to see the result. The steps are in [Run a paid checkout](#run-a-paid-checkout).
 
 **TIA out.** Inference is Houston's OpenAI-compatible chat API. An unpaid `POST /v1/chat/completions` returns `402` with a base64 `payment-required` header (x402 v2, scheme `escrow-upto`, network `eip155:714`, asset `native`). The client then:
 
@@ -87,7 +88,27 @@ The quote amount is a **ceiling**. `upto` means the facilitator can settle less 
 
 ## Run a paid checkout
 
-`stripe listen` prints a `whsec_…` signing secret. Put that in `STRIPE_WEBHOOK_SECRET` before the webhook will accept events. Start listen once, save the secret, then use these three terminals. Leave listen running as the second one.
+### One terminal
+
+`npm run live` starts `stripe listen`, reads the `whsec_…` signing secret from its Ready line, and starts the existing webhook with that secret in the child environment. It does not write `.env`. It then creates a Checkout Session and prints the URL. `Ctrl-C` stops listen and the webhook.
+
+Install the [Stripe CLI](https://docs.stripe.com/stripe-cli) and run `stripe login` once. Put `STRIPE_SECRET_KEY` in `.env` (`sk_test_…` until you mean to charge). If `stripe` is not on `PATH`, or listen exits because the CLI is not logged in, the command stops and names the next command to run.
+
+```bash
+npm run live -- --task "In one sentence, name a service a small agent could sell for GBP."
+```
+
+Leave out `--task` and the Checkout page asks "What should the agent do". A task typed there overrides `--task`.
+
+Open the Checkout URL. Pay with Stripe's test card `4242 4242 4242 4242`, any future expiry, any CVC, and any postcode. That card is test mode. It is not revenue.
+
+`DEMO_MODE` is the same switch as `npm run webhook`. Unset, or `dry-run`, the webhook uses mock inference and spends no TIA. `DEMO_MODE=live npm run live` runs the Houston paid call and then posts new receipt lines to Mocha. It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue.
+
+Listen lines are prefixed `[stripe]`. Webhook lines are prefixed `[webhook]`.
+
+### Three terminals
+
+Use separate terminals when you want to watch listen and the webhook apart. `stripe listen` prints a `whsec_…` signing secret. Put that in `STRIPE_WEBHOOK_SECRET` before the webhook will accept events. `npm run live` does that itself. This path does not.
 
 ```bash
 npm run webhook
@@ -101,21 +122,19 @@ stripe listen --events checkout.session.completed --forward-to localhost:8787/we
 npm run checkout -- --task "In one sentence, name a service a small agent could sell for GBP."
 ```
 
-Leave out `--task` and the Checkout page asks "What should the agent do". A task typed there overrides `--task`.
-
-Open the Checkout URL from the third terminal. Pay with Stripe's test card `4242 4242 4242 4242`, any future expiry, any CVC, and any postcode. That card is test mode. It is not revenue.
+Open the Checkout URL from the third terminal. The same test card applies. If `WEBHOOK_PORT` is not `8787`, change the listen URL and run the webhook with that port.
 
 What you should see:
 
-- Terminal 2 forwards `checkout.session.completed`.
-- Terminal 1 writes a `sale`, then a line that the job finished. The default `DEMO_MODE=dry-run` uses mock inference. It does not call Houston and it does not spend TIA. The mock result is printed in that terminal.
+- `stripe listen` forwards `checkout.session.completed`. On the one-terminal path those lines are prefixed `[stripe]`.
+- The webhook writes a `sale`, then a line that the job finished. The default `DEMO_MODE=dry-run` uses mock inference. It does not call Houston and it does not spend TIA. The mock result is printed by the webhook (`[webhook]` when you used `npm run live`).
 - The browser lands on `/success?session_id=cs_…`. If you get there before the job finishes, the page says it is working on it and refreshes. When the job is done, the page shows the task and the result.
 - `jobs.json` (gitignored) has the same task, status, and result.
 - `receipts.jsonl` has the `sale` and the `inference`. Both carry the Checkout Session id. The inference `stripePaymentId` is the sale's `paymentId`.
 - After the job finishes, unposted receipt lines are submitted to Mocha. The terminal prints the blob height, the commitment, and a [Celenium](https://mocha.celenium.io/) link for that blob on the height line. A live Houston job also prints the Eden deposit hash on the `deposit` and `tiaCharged` lines, with a [Blockscout](https://eden.blockscout.com) transaction link. Dry-run checkout uses mock inference, so it has no Eden deposit link. The post needs faucet TIA on the `celestia1` address from `npm run celestia:address` ([https://mocha.celenium.io/faucet](https://mocha.celenium.io/faucet)). If the account has no TIA, the log says `insufficient funds` and names that command and faucet. The Stripe sale and the Houston job stay as they are. `npm run post` submits any lines still missing from `posts.json`. A Mocha blob is a testnet log, not revenue.
 - `npm run verify` prints the GBP amount and the TIA side for that session. In dry-run, TIA was not charged. Test mode is not revenue.
 
-`DEMO_MODE=live` on the webhook process uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again. A finished live job posts its new receipt lines the same way.
+`DEMO_MODE=live` on the webhook process (`npm run live` passes that value through) uses the real Houston paid call (the same quote, Eden deposit, and Payment-Signature path as `npm run demo`). It needs `EDEN_PRIVATE_KEY` and TIA on Eden. A test-mode card is still not revenue. A resent webhook does not deposit again. A finished live job posts its new receipt lines the same way.
 
 ## Spend cap
 
@@ -159,7 +178,7 @@ See `.env.example`. The ones that matter:
 | `CELESTIA_AUTH_TOKEN` | Bearer token for that light node. |
 | `CELESTIA_NAMESPACE` | Default `shipyardmm` (10-byte v0 namespace id) |
 | `STRIPE_SECRET_KEY` | Stripe secret. Use `sk_test_…` until you intend to charge. |
-| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret |
+| `STRIPE_WEBHOOK_SECRET` | Webhook signing secret for `npm run webhook`. `npm run live` ignores this and uses the `whsec_…` from `stripe listen`. |
 | `STRIPE_AMOUNT_GBP` | Checkout price, default `5.00` |
 | `JOBS_PATH` | Checkout job results. Default `jobs.json`. Gitignored. |
 
@@ -297,6 +316,7 @@ celestia/             Go helper: celestia-node client, public Mocha endpoints
 src/mocha.ts          spawns the helper for post and verify
 src/celestia.ts       namespace, payload bytes, optional light-node JSON-RPC
 src/stripe.ts         Checkout and the webhook
+src/live.ts           one terminal: stripe listen, the webhook, and the Checkout URL
 src/jobs.ts           checkout job file and the /success page
 src/fulfill.ts        mock inference, or the Houston paid call, for one checkout
 src/run.ts            wires the demo together

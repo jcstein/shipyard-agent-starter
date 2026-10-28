@@ -57,13 +57,13 @@ export function taskFromArgv(argv: string[]): string | null {
   if (index !== -1) {
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
-      throw new Error('Usage: npm run checkout -- --task "what the agent should do"');
+      throw new Error('Usage: npm run live -- --task "what the agent should do"');
     }
     return requireTask(value);
   }
   const positional = args.filter((arg) => !arg.startsWith("--"));
   if (positional.length > 1) {
-    throw new Error('Pass one task: npm run checkout -- --task "what the agent should do"');
+    throw new Error('Pass one task: npm run live -- --task "what the agent should do"');
   }
   const only = positional[0];
   return only ? requireTask(only) : null;
