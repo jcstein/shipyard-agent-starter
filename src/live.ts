@@ -93,7 +93,11 @@ function isOptionalEnvNotice(line: string): boolean {
   return /\.env not found\. Continuing without it\./.test(line);
 }
 
-export type LiveForwardState = { explorers: Set<string> };
+export type LiveForwardState = {
+  explorers: Set<string>;
+  /** Last workshop stage printed, used to insert a blank line between beats. */
+  stage?: "paid" | "houston" | "mocha" | "other";
+};
 
 function dedupeExplorers(line: string, state: LiveForwardState): string | null {
   const next = line
@@ -105,6 +109,63 @@ function dedupeExplorers(line: string, state: LiveForwardState): string | null {
     .replace(/[ \t]{2,}/g, " ")
     .trim();
   return next.length === 0 ? null : next;
+}
+
+function stageGap(state: LiveForwardState, stage: LiveForwardState["stage"]): string {
+  if (!stage || state.stage === stage) return "";
+  const gap = state.stage ? "\n" : "";
+  state.stage = stage;
+  return gap;
+}
+
+/** Shape one story line for the terminal. Explorer URLs sit on their own indented line. */
+function prettifyStoryLine(line: string, state: LiveForwardState): string | null {
+  const paid = /^paid (.+)$/.exec(line);
+  if (paid) {
+    const rest = paid[1]!.replace(/\. Test mode is not revenue\.$/, " · test mode (not revenue)");
+    return `${stageGap(state, "paid")}paid ${rest}`;
+  }
+
+  if (line.startsWith("Houston:")) {
+    return `${stageGap(state, "houston")}${line}`;
+  }
+
+  const deposit = /^deposit: (0x[0-9a-fA-F]+)(?: (https:\/\/\S+))?$/.exec(line);
+  if (deposit) {
+    const prefix = stageGap(state, "houston");
+    const hash = deposit[1]!;
+    const url = deposit[2];
+    return url ? `${prefix}Eden deposit ${hash}\n  ${url}` : `${prefix}Eden deposit ${hash}`;
+  }
+
+  if (line.startsWith("tiaCharged")) {
+    const prefix = stageGap(state, "houston");
+    const short = line
+      .replace(/^tiaCharged is null\. The quote is a ceiling, not the charge\.$/, "tiaCharged unknown · quote is a ceiling")
+      .replace(
+        /^tiaCharged: (.+)\. The quote is a ceiling, not this charge\.$/,
+        "tiaCharged $1 · quote is a ceiling",
+      );
+    return `${prefix}${short}`;
+  }
+
+  const height = /^height (\d+)(?: (https:\/\/\S+))?$/.exec(line);
+  if (height) {
+    const prefix = stageGap(state, "mocha");
+    const n = height[1]!;
+    const url = height[2];
+    return url ? `${prefix}Mocha height ${n}\n  ${url}` : `${prefix}Mocha height ${n}`;
+  }
+
+  if (line.startsWith("Result:")) {
+    return `${stageGap(state, "houston")}${line}`;
+  }
+
+  if (line.startsWith("job ")) {
+    return `${stageGap(state, "other")}${line}`;
+  }
+
+  return `${stageGap(state, "other")}${line}`;
 }
 
 /**
@@ -123,7 +184,9 @@ export function formatForwardedLiveLine(
   if (stderr || isLiveFailure(plain)) return dedupeExplorers(plain, state);
   if (source === "stripe") return null;
   if (!WEBHOOK_STORY.test(plain)) return null;
-  return dedupeExplorers(plain, state);
+  const deduped = dedupeExplorers(plain, state);
+  if (!deduped) return null;
+  return prettifyStoryLine(deduped, state);
 }
 
 export function listenFailureMessage(output: string, missingBinary: boolean): string {
@@ -328,7 +391,7 @@ export function startLive(input: StartLiveInput): LiveSession {
     if (gotSecret || settled) return;
     gotSecret = true;
     if (timers.secret) clearTimeout(timers.secret);
-    log("Captured the stripe listen signing secret for the webhook. .env was not changed.");
+    log("Listen secret captured (.env unchanged).");
     const sessionCfg = checkoutConfig(cfg, secret);
     let child: LiveChild;
     try {
@@ -365,13 +428,13 @@ export function startLive(input: StartLiveInput): LiveSession {
     try {
       const session = await openCheckout(sessionCfg, fetch, input.task);
       if (settled) return;
+      log("");
       log(`Checkout ${session.id}`);
       log(session.url);
       if (input.task) log(`Task: ${input.task}`);
-      else log("No task argument. The Checkout page asks for one.");
-      log("Pay with 4242 4242 4242 4242, any future expiry, any CVC, and any postcode. Test mode is not revenue.");
-      log(modeLine(cfg.mode));
-      log("Ctrl-C stops stripe listen and the webhook.");
+      else log("No task argument — Checkout asks for one.");
+      log("Pay with 4242 4242 4242 4242 · any future expiry / CVC / postcode · test mode is not revenue");
+      log("Ctrl-C stops listen + webhook.");
     } catch (error) {
       if (settled) return;
       errorLog(error instanceof Error ? error.message : String(error));
@@ -439,10 +502,9 @@ export function startLive(input: StartLiveInput): LiveSession {
     return { done, stop: () => finish(0) };
   }
 
-  log(
-    `Starting stripe listen for checkout.session.completed, forwarding to localhost:${cfg.webhookPort}/webhook.`,
-  );
+  log(`live · stripe listen → localhost:${cfg.webhookPort}/webhook`);
   log(modeLine(cfg.mode));
+  log("");
 
   let listenChild: LiveChild;
   try {
