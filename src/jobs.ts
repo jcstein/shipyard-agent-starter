@@ -173,8 +173,8 @@ function explorerLink(label: string, url: string | null | undefined): string {
 
 function explorerList(links: SuccessLinks | undefined): string {
   const items =
-    explorerLink("Celenium Mocha blob", links?.mochaUrl) +
-    explorerLink("Eden Blockscout", links?.edenUrl);
+    explorerLink("Eden Blockscout", links?.edenUrl) +
+    explorerLink("Celenium Mocha blob", links?.mochaUrl);
   return items ? `<ul class="links">${items}</ul>` : "";
 }
 
