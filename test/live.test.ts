@@ -226,17 +226,29 @@ describe("live log filter", () => {
       null,
     );
     assert.equal(formatForwardedLiveLine("webhook", "Stripe webhook listening on http://127.0.0.1:8787/webhook", seen), null);
-    assert.equal(formatForwardedLiveLine("webhook", "paid cs_test £5.00. Test mode is not revenue.", seen), "paid cs_test £5.00. Test mode is not revenue.");
-    assert.equal(formatForwardedLiveLine("webhook", "Houston: paying for inference on Eden", seen), "Houston: paying for inference on Eden");
-    assert.equal(formatForwardedLiveLine("webhook", `deposit: 0x${"cd".repeat(32)} ${eden}`, seen), `deposit: 0x${"cd".repeat(32)} ${eden}`);
+    assert.equal(
+      formatForwardedLiveLine("webhook", "paid cs_test £5.00. Test mode is not revenue.", seen),
+      "paid cs_test £5.00 · test mode (not revenue)",
+    );
+    assert.equal(
+      formatForwardedLiveLine("webhook", "Houston: paying for inference on Eden", seen),
+      "\nHouston: paying for inference on Eden",
+    );
+    assert.equal(
+      formatForwardedLiveLine("webhook", `deposit: 0x${"cd".repeat(32)} ${eden}`, seen),
+      `Eden deposit 0x${"cd".repeat(32)}\n  ${eden}`,
+    );
     assert.equal(
       formatForwardedLiveLine("webhook", `tiaCharged: 1 wei. The quote is a ceiling, not this charge. ${eden}`, seen),
-      "tiaCharged: 1 wei. The quote is a ceiling, not this charge.",
+      "tiaCharged 1 wei · quote is a ceiling",
     );
-    assert.equal(formatForwardedLiveLine("webhook", `height 9 ${blob}`, seen), `height 9 ${blob}`);
+    assert.equal(
+      formatForwardedLiveLine("webhook", `height 9 ${blob}`, seen),
+      `\nMocha height 9\n  ${blob}`,
+    );
     assert.equal(formatForwardedLiveLine("webhook", "commitment abc", seen), null);
     assert.equal(formatForwardedLiveLine("webhook", "trace: traces/x.json", seen), null);
-    assert.equal(formatForwardedLiveLine("webhook", `height 9 ${blob}`, seen), "height 9");
+    assert.equal(formatForwardedLiveLine("webhook", `height 9 ${blob}`, seen), "Mocha height 9");
   });
 
   it("keeps failures and stderr, and still hides the signing secret", () => {
@@ -317,10 +329,12 @@ describe("npm run live", () => {
     assert.match(text, /Houston: a one-sentence pitch/);
     assert.match(text, /https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_live/);
     assert.match(text, /4242 4242 4242 4242/);
-    assert.match(text, /\.env was not changed/);
+    assert.match(text, /\.env unchanged/);
     assert.equal(text.split(eden).length - 1, 1);
     assert.equal(text.split(mocha).length - 1, 1);
-    assert.match(text, /tiaCharged: 1 wei\. The quote is a ceiling, not this charge\./);
+    assert.match(text, /tiaCharged 1 wei · quote is a ceiling/);
+    assert.match(text, /Eden deposit/);
+    assert.match(text, /Mocha height 1847001/);
     assert.match(run.errors.join("\n"), /insufficient funds/);
     assert.equal(readFileSync(join(run.dir, ".env"), "utf8"), envBody);
 
@@ -492,7 +506,7 @@ setInterval(() => {}, 1000);
       }
       assert.equal(logs.join("\n").includes("Stripe webhook listening"), false);
       assert.equal(logs.join("\n").includes("whsec_"), false);
-      assert.match(logs.join("\n"), /\.env was not changed/);
+      assert.match(logs.join("\n"), /\.env unchanged/);
       assert.match(logs.join("\n"), /https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_real/);
       assert.equal(openedSecret, "whsec_fromreal");
       const webhookPid = pids[1];
