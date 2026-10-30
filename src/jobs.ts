@@ -183,7 +183,7 @@ export function renderSuccess(input: { sessionId: string | null; job: Job | null
     const mock = job?.dryRun ? "<p>This run uses mock inference and spends no TIA.</p>" : "";
     return page(
       title,
-      `<meta http-equiv="refresh" content="2"><h1>${title}</h1><p>Working on it. Refresh this page.</p>${task}${mock}<p>${revenueLine(job?.livemode === true)}</p>`,
+      `<meta http-equiv="refresh" content="2"><h1>${title}</h1><p>Working on it.</p>${task}${mock}<p>${revenueLine(job?.livemode === true)}</p>`,
     );
   }
   if (job.status === "failed") {
