@@ -214,7 +214,8 @@ describe("success page", () => {
     assert.equal(done.includes("http-equiv"), false);
     assert.match(done, /name="viewport" content="width=device-width, initial-scale=1"/);
     assert.match(done, /max-width:40rem/);
-    assert.match(done, /padding:1rem/);
+    assert.match(done, /padding:2rem 1\.25rem 3rem/);
+    assert.match(done, /ul\.links/);
     assert.match(done, /white-space:normal/);
     assert.match(done, /white-space:pre-wrap/);
     assert.match(done, /overflow-wrap:anywhere/);

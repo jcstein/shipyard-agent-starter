@@ -165,54 +165,77 @@ export type SuccessLinks = {
   edenUrl?: string | null;
 };
 
-function explorerParagraph(label: string, url: string | null | undefined): string {
+function explorerLink(label: string, url: string | null | undefined): string {
   if (!url) return "";
   const safe = escapeHtml(url);
-  return `<p>${label}: <a href="${safe}">${safe}</a></p>`;
+  return `<li><a href="${safe}">${escapeHtml(label)}</a></li>`;
 }
 
-/** HTML for GET /success. A missing or unfinished job asks the browser to refresh. */
+function explorerList(links: SuccessLinks | undefined): string {
+  const items =
+    explorerLink("Celenium Mocha blob", links?.mochaUrl) +
+    explorerLink("Eden Blockscout", links?.edenUrl);
+  return items ? `<ul class="links">${items}</ul>` : "";
+}
+
+/** HTML for GET /success. Pending jobs auto-refresh every 2s. */
 export function renderSuccess(input: { sessionId: string | null; job: Job | null; links?: SuccessLinks }): string {
   const title = "Payment received";
   if (!input.sessionId) {
-    return page(title, `<h1>${title}</h1><p>Payment received.</p><p>${revenueLine(false)}</p>`);
+    return page(
+      title,
+      `<h1>${title}</h1><p class="lede">Payment received.</p><p class="meta">${revenueLine(false)}</p>`,
+    );
   }
   const job = input.job;
   if (!job || job.status === "queued" || job.status === "running") {
-    const task = job ? `<p>Task</p><pre>${escapeHtml(job.task)}</pre>` : "";
-    const mock = job?.dryRun ? "<p>This run uses mock inference and spends no TIA.</p>" : "";
+    const task = job
+      ? `<section><h2>Task</h2><pre>${escapeHtml(job.task)}</pre></section>`
+      : "";
+    const mock = job?.dryRun
+      ? `<p class="status">This run uses mock inference and spends no TIA.</p>`
+      : "";
     return page(
       title,
-      `<meta http-equiv="refresh" content="2"><h1>${title}</h1><p>Working on it.</p>${task}${mock}<p>${revenueLine(job?.livemode === true)}</p>`,
+      `<meta http-equiv="refresh" content="2"><h1>${title}</h1><p class="status">Working on it.</p>${task}${mock}<p class="meta">${revenueLine(job?.livemode === true)}</p>`,
     );
   }
   if (job.status === "failed") {
     return page(
       title,
-      `<h1>${title}</h1><p>The job failed. A resent webhook does not run it again.</p><pre>${escapeHtml(job.error ?? "job failed")}</pre><p>${revenueLine(job.livemode)}</p>`,
+      `<h1>${title}</h1><p class="status">The job failed. A resent webhook does not run it again.</p><pre class="error">${escapeHtml(job.error ?? "job failed")}</pre><p class="meta">${revenueLine(job.livemode)}</p>`,
     );
   }
   const kind = job.dryRun
     ? "Mock inference. No Houston call was made and no TIA was spent."
     : "Houston inference finished.";
   const waiting =
-    job.linksReady === false ? `<meta http-equiv="refresh" content="2"><p>Posting the receipt to Mocha.</p>` : "";
-  const links =
-    explorerParagraph("Celenium Mocha blob", input.links?.mochaUrl) +
-    explorerParagraph("Eden Blockscout", input.links?.edenUrl);
+    job.linksReady === false
+      ? `<meta http-equiv="refresh" content="2"><p class="status">Posting the receipt to Mocha.</p>`
+      : "";
+  const links = explorerList(input.links);
   return page(
     title,
-    `${waiting}<h1>${title}</h1><p>Task</p><pre>${escapeHtml(job.task)}</pre><p>Result</p><pre>${escapeHtml(job.result ?? "")}</pre><p>${kind}</p>${links}<p>${revenueLine(job.livemode)}</p>`,
+    `${waiting}<h1>${title}</h1><section><h2>Task</h2><pre>${escapeHtml(job.task)}</pre></section><section><h2>Result</h2><pre>${escapeHtml(job.result ?? "")}</pre></section><p class="status">${kind}</p>${links}<p class="meta">${revenueLine(job.livemode)}</p>`,
   );
 }
 
-/** Keep long task and result strings inside the viewport. `<pre>` does not wrap on its own. */
+/** Readable workshop page: short labels, wrapped body text, explorers as named links. */
 const PAGE_STYLE = [
-  "html{color:#000;background:#fff}",
-  "body{box-sizing:border-box;margin:0;padding:1rem;max-width:40rem;font-family:serif;white-space:normal;overflow-wrap:anywhere}",
-  "pre{box-sizing:border-box;margin:0 0 1rem;max-width:100%;font-family:inherit;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}",
+  "html{color:#111;background:#f6f5f2}",
+  "body{box-sizing:border-box;margin:0 auto;padding:2rem 1.25rem 3rem;max-width:40rem;font:16px/1.55 -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;white-space:normal;overflow-wrap:anywhere}",
+  "h1{margin:0 0 1rem;font-size:1.75rem;line-height:1.2;letter-spacing:-0.02em}",
+  "h2{margin:0 0 0.4rem;font-size:0.75rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#666}",
+  "section{margin:1.25rem 0}",
+  "pre{box-sizing:border-box;margin:0;padding:0.9rem 1rem;max-width:100%;border:1px solid #e4e2dc;border-radius:0.5rem;background:#fff;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}",
+  "pre.error{border-color:#e8c4c4;background:#fff7f7}",
+  ".lede,.status{margin:0 0 1rem}",
+  ".meta{margin:1.5rem 0 0;color:#666;font-size:0.9rem}",
+  "ul.links{margin:1rem 0 0;padding:0;list-style:none;display:grid;gap:0.5rem}",
+  "ul.links a{display:inline-block;color:#0b57d0;text-decoration:none;border-bottom:1px solid transparent}",
+  "ul.links a:hover{border-bottom-color:currentColor}",
 ].join("");
 
 function page(title: string, body: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${PAGE_STYLE}</style></head><body>${body}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title><style>${PAGE_STYLE}</style></head><body>${body}</body></html>`;
 }
