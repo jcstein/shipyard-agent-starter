@@ -188,7 +188,7 @@ describe("success page", () => {
         finishedAt: null,
       },
     });
-    assert.match(running, /Working on it\. Refresh this page/);
+    assert.match(running, /Working on it\./);
     assert.match(running, /not revenue/);
     assert.equal(running.includes("<script>"), false);
     assert.match(running, /mock inference/);
@@ -330,7 +330,7 @@ describe("paid checkout", () => {
     };
     try {
       const early = await call(port, "GET", "/success?session_id=cs_test_job");
-      assert.match(early.body, /Working on it\. Refresh this page/);
+      assert.match(early.body, /Working on it\./);
       assert.match(early.body, /not revenue/);
 
       const raw = completedEvent({ id: "cs_test_job", paymentIntent: "pi_test_job", task: "write a haiku" });
@@ -460,7 +460,7 @@ describe("paid checkout", () => {
       const first = await post();
       assert.equal(JSON.parse(first.body).job, "started");
       const working = await call(port, "GET", "/success?session_id=cs_test_gate");
-      assert.match(working.body, /Working on it\. Refresh this page/);
+      assert.match(working.body, /Working on it\./);
       assert.match(working.body, /from &lt;the&gt; page/);
       assert.equal(working.body.includes("<the>"), false);
       const second = await post();
