@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Config } from "./config.ts";
 import { fulfillCheckout, successExplorerLinks } from "./fulfill.ts";
-import { claimJob, readJob, recoverInterruptedJobs, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
+import { DEFAULT_TASK, claimJob, readJob, recoverInterruptedJobs, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
 import type { ReceiptPostDeps } from "./mocha.ts";
 import { gbpFromPence, penceFromGbp } from "./money.ts";
 import { appendReceipt, findByCheckout } from "./receipts.ts";
@@ -77,13 +77,16 @@ export async function createCheckout(
   // New Stripe accounts enable Managed Payments by default, which rejects a
   // line item that has no product tax code. This session opts out.
   form.set("managed_payments[enabled]", "false");
-  // The page asks when the CLI did not. A typed value wins over metadata.
+  // The page asks when the CLI did not. Prefill that field; the customer can
+  // still edit it. A CLI task stays in metadata only — a pre-filled value is
+  // submitted and would override it.
   form.set("custom_fields[0][key]", "task");
   form.set("custom_fields[0][label][type]", "custom");
   form.set("custom_fields[0][label][custom]", "What should the agent do");
   form.set("custom_fields[0][type]", "text");
   form.set("custom_fields[0][optional]", task ? "true" : "false");
   form.set("custom_fields[0][text][maximum_length]", "255");
+  if (!task) form.set("custom_fields[0][text][default_value]", DEFAULT_TASK);
   if (task) form.set("metadata[task]", task);
   const res = await fetchImpl("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",

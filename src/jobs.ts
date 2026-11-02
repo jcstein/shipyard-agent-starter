@@ -3,7 +3,7 @@ import { writeJsonAtomic } from "./files.ts";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
 export const DEFAULT_TASK =
-  "In one sentence, pitch a £15–£30 GBP service a small agent can deliver this week with zero or one human approval step (e.g. owner okays the final send). Name the offer, price, what the agent does end-to-end, and what (if anything) a human still touches. Do not spend money.";
+  "In one sentence, pitch a £15–£30 GBP service a small agent can deliver this week with zero or one human approval step. Name the offer, price, what the agent does end-to-end, and what (if anything) a human still touches. Do not spend money.";
 
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
@@ -57,7 +57,7 @@ function requireTask(value: string): string {
   return task;
 }
 
-/** `--task "…"` or one positional argument. Omitted means the Checkout page asks. */
+/** `--task "…"` or one positional argument. Omitted means Checkout opens with the default task filled in. */
 export function taskFromArgv(argv: string[]): string | null {
   const args = argv.slice(2).filter((arg) => arg !== "--");
   const index = args.indexOf("--task");
