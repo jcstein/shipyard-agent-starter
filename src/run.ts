@@ -20,7 +20,7 @@ import { appendReceipt, committedWei, readReceiptLines } from "./receipts.ts";
 import { openPaymentTrace, tracingFetch, type Tracer } from "./trace.ts";
 
 const PROMPT =
-  "In one sentence, pitch a £15–£30 service a small agent could sell to a person or small business for GBP this week. Do not spend money.";
+  "In one sentence, pitch a £15–£30 GBP service a small agent can deliver this week with zero or one human approval step (e.g. owner okays the final send). Name the offer, price, what the agent does end-to-end, and what (if anything) a human still touches. Do not spend money.";
 
 export const DEMO_MESSAGES: ChatMessage[] = [{ role: "user", content: PROMPT }];
 
