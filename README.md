@@ -100,7 +100,7 @@ Install the [Stripe CLI](https://docs.stripe.com/stripe-cli) and run `stripe log
 DEMO_MODE=live npm run live -- --task "In one sentence, name a service a small agent could sell for GBP."
 ```
 
-Leave out `--task` and the Checkout page asks "What should the agent do". A task typed there overrides `--task`.
+Leave out `--task` and "What should the agent do" opens filled with the default task. You can edit it. Stripe text fields hold 255 characters, so a longer default is cut on a word boundary; leaving that text unchanged still runs the full sentence. A task typed there overrides `--task`.
 
 Open the Checkout URL. Pay with Stripe's test card `4242 4242 4242 4242`, any future expiry, any CVC, and any postcode. That card is test mode. It is not revenue.
 

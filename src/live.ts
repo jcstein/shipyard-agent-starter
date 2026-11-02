@@ -432,7 +432,7 @@ export function startLive(input: StartLiveInput): LiveSession {
       log(`Checkout ${session.id}`);
       log(session.url);
       if (input.task) log(`Task: ${input.task}`);
-      else log("No task argument — Checkout asks for one.");
+      else log("No task argument — Checkout shows the default task; you can edit it.");
       log("Pay with 4242 4242 4242 4242 · any future expiry / CVC / postcode · test mode is not revenue");
       log("Ctrl-C stops listen + webhook.");
     } catch (error) {

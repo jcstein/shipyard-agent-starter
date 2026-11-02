@@ -55,7 +55,7 @@ function requireTask(value: string): string {
   return task;
 }
 
-/** `--task "…"` or one positional argument. Omitted means the Checkout page asks. */
+/** `--task "…"` or one positional argument. Omitted means Checkout opens with the default task filled in. */
 export function taskFromArgv(argv: string[]): string | null {
   const args = argv.slice(2).filter((arg) => arg !== "--");
   const index = args.indexOf("--task");
@@ -74,13 +74,30 @@ export function taskFromArgv(argv: string[]): string | null {
   return only ? requireTask(only) : null;
 }
 
-/** Custom field wins when the customer typed one. Otherwise metadata, otherwise the demo sentence. */
+/**
+ * Text that pre-fills the Checkout task field.
+ * Stripe `custom_fields.text.default_value` allows 255 characters, so a longer
+ * DEFAULT_TASK is cut on a word boundary. Leaving that text unchanged still
+ * runs the full sentence.
+ */
+export function checkoutTaskDefault(): string {
+  const max = 255;
+  if (DEFAULT_TASK.length <= max) return DEFAULT_TASK;
+  const cut = DEFAULT_TASK.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return space > 0 ? cut.slice(0, space) : cut;
+}
+
+/** Custom field wins when the customer typed one. An unedited prefill is the full default. Otherwise metadata, otherwise the demo sentence. */
 export function taskFromSession(session: SessionTaskSource): string {
   const fields = session.custom_fields ?? [];
+  const prefilled = checkoutTaskDefault();
   for (const field of fields) {
     if (field.key !== "task") continue;
     const value = normalizeTask(field.text?.value ?? "");
-    if (value.length > 0) return value.slice(0, TASK_LIMIT);
+    if (value.length === 0) continue;
+    if (value === prefilled) return DEFAULT_TASK;
+    return value.slice(0, TASK_LIMIT);
   }
   const metadata = normalizeTask(session.metadata?.task ?? "");
   if (metadata.length > 0) return metadata.slice(0, TASK_LIMIT);

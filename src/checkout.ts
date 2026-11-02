@@ -17,7 +17,7 @@ if (!process.exitCode) {
       console.log(`Checkout ${session.id}`);
       console.log(session.url);
       if (task) console.log(`Task: ${task}`);
-      else console.log("No task argument. The Checkout page asks for one.");
+      else console.log("No task argument. The Checkout page shows the default task; you can edit it.");
       console.log("The webhook runs the task after checkout.session.completed. Dry-run uses mock inference and spends no TIA.");
       console.log("Test-mode cards do not count as revenue. GBP paid by an outside customer in live mode does.");
     })
