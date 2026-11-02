@@ -12,7 +12,7 @@ import { loadConfig, type Config } from "../src/config.ts";
 import { NATIVE_ESCROW, edenTxUrl } from "../src/eden.ts";
 import { fulfillCheckout } from "../src/fulfill.ts";
 import { parsePaymentRequired, type ParsedQuote } from "../src/houston.ts";
-import { claimJob, readJob, renderSuccess, taskFromArgv, taskFromSession } from "../src/jobs.ts";
+import { claimJob, DEFAULT_TASK, readJob, renderSuccess, taskFromArgv, taskFromSession } from "../src/jobs.ts";
 import { mochaBlobUrl, postUnpostedReceipts, type HelperRun } from "../src/mocha.ts";
 import { appendReceipt, readReceiptLines } from "../src/receipts.ts";
 import { createCheckout, recordSale, settleJobs, startWebhook, stripePaymentId } from "../src/stripe.ts";
@@ -144,7 +144,8 @@ describe("checkout task", () => {
       }),
       "from the page",
     );
-    assert.match(taskFromSession({}), /GBP/);
+    assert.equal(taskFromSession({}), DEFAULT_TASK);
+    assert.ok(DEFAULT_TASK.length <= 255);
   });
 
   it("puts the CLI task in metadata and leaves the page field optional", async () => {
@@ -161,6 +162,7 @@ describe("checkout task", () => {
     const params = new URLSearchParams(body);
     assert.equal(params.get("metadata[task]"), "write a haiku");
     assert.equal(params.get("custom_fields[0][optional]"), "true");
+    assert.equal(params.get("custom_fields[0][text][default_value]"), null);
     assert.equal(params.get("custom_fields[0][label][custom]"), "What should the agent do");
     assert.equal(params.get("success_url"), "http://localhost:8787/success?session_id={CHECKOUT_SESSION_ID}");
   });
