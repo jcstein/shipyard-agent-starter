@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { writeJsonAtomic } from "./files.ts";
+import { withFileLock, writeJsonAtomic } from "./files.ts";
 import { currentJobOwner, jobOwnerIsRunning, type JobOwner } from "./job-owner.ts";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
@@ -102,7 +102,8 @@ export function readJobLog(path: string): JobLog {
   return parsed;
 }
 
-export function writeJobLog(path: string, log: JobLog): void {
+// Only called while holding the job log's shared mutation lock.
+function writeJobLog(path: string, log: JobLog): void {
   writeJsonAtomic(path, log);
 }
 
@@ -122,32 +123,36 @@ export async function claimJob(
   now = new Date(),
 ): Promise<{ job: Job; claimed: boolean }> {
   const owner = await currentJobOwner();
-  const log = readJobLog(path);
-  const existing = log.jobs.find((job) => job.checkoutId === input.checkoutId);
-  if (existing) return { job: existing, claimed: false };
-  const job: Job = {
-    ...input,
-    ownerPid: process.pid,
-    owner,
-    status: "queued",
-    result: null,
-    error: null,
-    requestId: null,
-    createdAt: now.toISOString(),
-    finishedAt: null,
-  };
-  log.jobs.push(job);
-  writeJobLog(path, log);
-  return { job, claimed: true };
+  return withFileLock(`${path}.lock`, async () => {
+    const log = readJobLog(path);
+    const existing = log.jobs.find((job) => job.checkoutId === input.checkoutId);
+    if (existing) return { job: existing, claimed: false };
+    const job: Job = {
+      ...input,
+      ownerPid: process.pid,
+      owner,
+      status: "queued",
+      result: null,
+      error: null,
+      requestId: null,
+      createdAt: now.toISOString(),
+      finishedAt: null,
+    };
+    log.jobs.push(job);
+    writeJobLog(path, log);
+    return { job, claimed: true };
+  }, { waitMs: 5000 });
 }
 
-export function updateJob(path: string, checkoutId: string, patch: Partial<Job>): Job {
-  const log = readJobLog(path);
-  const job = log.jobs.find((item) => item.checkoutId === checkoutId);
-  if (!job) throw new Error(`no job for ${checkoutId}`);
-  Object.assign(job, patch);
-  writeJobLog(path, log);
-  return job;
+export async function updateJob(path: string, checkoutId: string, patch: Partial<Job>): Promise<Job> {
+  return withFileLock(`${path}.lock`, async () => {
+    const log = readJobLog(path);
+    const job = log.jobs.find((item) => item.checkoutId === checkoutId);
+    if (!job) throw new Error(`no job for ${checkoutId}`);
+    Object.assign(job, patch);
+    writeJobLog(path, log);
+    return job;
+  }, { waitMs: 5000 });
 }
 
 async function ownerIsRunning(job: Job): Promise<boolean> {
@@ -170,24 +175,27 @@ export async function recoverInterruptedJobs(path: string): Promise<void> {
     if (job.status !== "queued" && job.status !== "running" && !(job.status === "done" && job.linksReady === false)) continue;
     if (!await ownerIsRunning(job)) abandoned.set(job.checkoutId, job);
   }
-  // Other workers can finish while ownership is checked; never overwrite that newer state.
-  const log = readJobLog(path);
-  let changed = false;
-  for (const job of log.jobs) {
-    const prior = abandoned.get(job.checkoutId);
-    if (!prior || job.ownerPid !== prior.ownerPid || JSON.stringify(job.owner) !== JSON.stringify(prior.owner)) continue;
-    if (job.status === "queued" || job.status === "running") {
-      job.status = "failed";
-      job.error = "This job was interrupted. No automatic retry was made. Inspect the payment reservations, receipts, and trace before starting another paid checkout; a deposit may already have been sent.";
-      job.finishedAt = new Date().toISOString();
-      changed = true;
-    } else if (job.status === "done" && job.linksReady === false) {
-      job.linksReady = true;
-      job.postError = "Receipt publication was interrupted. The result is saved. Inspect any pending Mocha submission before using npm run post.";
-      changed = true;
+  if (abandoned.size === 0) return;
+  await withFileLock(`${path}.lock`, async () => {
+    // Other workers can finish while ownership is checked; never overwrite that newer state.
+    const log = readJobLog(path);
+    let changed = false;
+    for (const job of log.jobs) {
+      const prior = abandoned.get(job.checkoutId);
+      if (!prior || job.ownerPid !== prior.ownerPid || JSON.stringify(job.owner) !== JSON.stringify(prior.owner)) continue;
+      if (job.status === "queued" || job.status === "running") {
+        job.status = "failed";
+        job.error = "This job was interrupted. No automatic retry was made. Inspect the payment reservations, receipts, and trace before starting another paid checkout; a deposit may already have been sent.";
+        job.finishedAt = new Date().toISOString();
+        changed = true;
+      } else if (job.status === "done" && job.linksReady === false) {
+        job.linksReady = true;
+        job.postError = "Receipt publication was interrupted. The result is saved. Inspect any pending Mocha submission before using npm run post.";
+        changed = true;
+      }
     }
-  }
-  if (changed) writeJobLog(path, log);
+    if (changed) writeJobLog(path, log);
+  }, { waitMs: 5000 });
 }
 
 function escapeHtml(value: string): string {

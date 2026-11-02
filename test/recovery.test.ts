@@ -79,7 +79,7 @@ test("recovery preserves queued, running, and publishing jobs owned by this inst
   const cfg = config();
   for (const status of ["queued", "running", "done"] as const) {
     const current = await job(cfg, `cs_active_${status}`);
-    updateJob(cfg.jobsPath, current.checkoutId, { status, linksReady: false });
+    await updateJob(cfg.jobsPath, current.checkoutId, { status, linksReady: false });
     await recoverInterruptedJobs(cfg.jobsPath);
     assert.equal(readJob(cfg.jobsPath, current.checkoutId)?.status, status);
     assert.equal(readJob(cfg.jobsPath, current.checkoutId)?.linksReady, false);
@@ -93,14 +93,14 @@ test("a live instance survives recovery but reused PIDs and mismatched tokens do
   const oldCfg = config({}, old.dir);
   const original = readJob(oldCfg.jobsPath, "cs_interrupted")!;
   for (const pid of [process.pid, active.child.pid!]) {
-    updateJob(oldCfg.jobsPath, original.checkoutId, { status: "running", ownerPid: pid });
+    await updateJob(oldCfg.jobsPath, original.checkoutId, { status: "running", ownerPid: pid });
     await recoverInterruptedJobs(oldCfg.jobsPath);
     assert.equal(readJob(oldCfg.jobsPath, original.checkoutId)?.status, "failed");
     assert.equal((await claimJob(oldCfg.jobsPath, original)).claimed, false);
   }
   // A reachable endpoint must prove the exact instance, not just that some worker exists.
   const owner = readJob(activeCfg.jobsPath, "cs_interrupted")!.owner!;
-  updateJob(oldCfg.jobsPath, original.checkoutId, { status: "running", owner: { ...owner, token: "wrong-instance" } });
+  await updateJob(oldCfg.jobsPath, original.checkoutId, { status: "running", owner: { ...owner, token: "wrong-instance" } });
   await recoverInterruptedJobs(oldCfg.jobsPath);
   assert.equal(readJob(oldCfg.jobsPath, original.checkoutId)?.status, "failed");
   await recoverInterruptedJobs(activeCfg.jobsPath);
@@ -111,20 +111,20 @@ test("a live instance survives recovery but reused PIDs and mismatched tokens do
 test("ambiguous legacy owners stop startup without failing active work or replaying payment", { timeout: 10000 }, async (t) => {
   const worker = await interruptedWorker(t, "quote");
   const cfg = config(); const legacy = await job(cfg, "cs_legacy");
-  updateJob(cfg.jobsPath, legacy.checkoutId, { owner: undefined, ownerPid: worker.child.pid, status: "running" });
+  await updateJob(cfg.jobsPath, legacy.checkoutId, { owner: undefined, ownerPid: worker.child.pid, status: "running" });
   let runs = 0;
   await assert.rejects(startWebhook(cfg, { runJob: async () => { runs++; } }), /Cannot verify legacy job owner.*Stop older webhook workers/);
   assert.equal(readJob(cfg.jobsPath, legacy.checkoutId)?.status, "running");
   assert.equal(runs, 0);
   // Explicit legacy migration after operator review; do not kill an unrelated reused PID.
-  updateJob(cfg.jobsPath, legacy.checkoutId, { ownerPid: undefined });
+  await updateJob(cfg.jobsPath, legacy.checkoutId, { ownerPid: undefined });
   await recoverInterruptedJobs(cfg.jobsPath);
   assert.equal(readJob(cfg.jobsPath, legacy.checkoutId)?.status, "failed");
-  updateJob(cfg.jobsPath, legacy.checkoutId, { ownerPid: worker.child.pid, status: "running" });
+  await updateJob(cfg.jobsPath, legacy.checkoutId, { ownerPid: worker.child.pid, status: "running" });
   await worker.stop();
   await recoverInterruptedJobs(cfg.jobsPath);
   assert.equal(readJob(cfg.jobsPath, legacy.checkoutId)?.status, "failed");
-  updateJob(cfg.jobsPath, legacy.checkoutId, { ownerPid: process.pid, status: "running" });
+  await updateJob(cfg.jobsPath, legacy.checkoutId, { ownerPid: process.pid, status: "running" });
   await recoverInterruptedJobs(cfg.jobsPath);
   assert.equal(readJob(cfg.jobsPath, legacy.checkoutId)?.status, "failed");
 });
@@ -134,7 +134,7 @@ test("an unresponsive owner aborts recovery without failing a possibly active jo
   const path = join(mkdtempSync(join(tmpdir(), "owner-")), "owner.sock");
   const server = createServer((socket) => { socket.on("error", () => {}); t.after(() => socket.destroy()); });
   server.listen(path); await once(server, "listening"); t.after(() => server.close());
-  updateJob(cfg.jobsPath, current.checkoutId, { status: "running", owner: { token: "silent", socketPath: path } });
+  await updateJob(cfg.jobsPath, current.checkoutId, { status: "running", owner: { token: "silent", socketPath: path } });
   await assert.rejects(recoverInterruptedJobs(cfg.jobsPath), /Could not verify the job owner/);
   assert.equal(readJob(cfg.jobsPath, current.checkoutId)?.status, "running");
 });
@@ -142,12 +142,12 @@ test("an unresponsive owner aborts recovery without failing a possibly active jo
 test("recovery preserves completion written while ownership is being checked", async (t) => {
   const cfg = config(); const current = await job(cfg, "cs_finished_during_recovery");
   const path = join(mkdtempSync(join(tmpdir(), "owner-")), "owner.sock");
-  const server = createServer((socket) => {
-    updateJob(cfg.jobsPath, current.checkoutId, { status: "done", linksReady: true, result: "saved" });
+  const server = createServer(async (socket) => {
+    await updateJob(cfg.jobsPath, current.checkoutId, { status: "done", linksReady: true, result: "saved" });
     socket.end("different-instance\n");
   });
   server.listen(path); await once(server, "listening"); t.after(() => server.close());
-  updateJob(cfg.jobsPath, current.checkoutId, { status: "running", owner: { token: "old", socketPath: path } });
+  await updateJob(cfg.jobsPath, current.checkoutId, { status: "running", owner: { token: "old", socketPath: path } });
   await recoverInterruptedJobs(cfg.jobsPath);
   assert.equal(readJob(cfg.jobsPath, current.checkoutId)?.status, "done");
   assert.equal(readJob(cfg.jobsPath, current.checkoutId)?.result, "saved");
