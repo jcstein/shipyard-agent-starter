@@ -7,3 +7,11 @@ traces/
 *.log
 celestia-keys/
 celestia/mocha-helper
+
+receipts.jsonl.payments.json
+receipts.jsonl.payment.lock
+posts.json.lock
+jobs.json.*.tmp
+jobs.json.lock
+posts.json.*.tmp
+receipts.jsonl.payments.json.*.tmp

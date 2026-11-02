@@ -1,3 +1,5 @@
+import { committedPaymentsWei } from "./payments.ts";
+import { withFileLock } from "./files.ts";
 import type { Config } from "./config.ts";
 import { localPostMatches, readPostLog, recordMockPost, writePostLog } from "./celestia.ts";
 import {
@@ -16,7 +18,7 @@ import { edenTxUrl } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 import { postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
-import { appendReceipt, committedWei, readReceiptLines } from "./receipts.ts";
+import { appendReceipt, readReceiptLines } from "./receipts.ts";
 import { openPaymentTrace, tracingFetch, type Tracer } from "./trace.ts";
 
 const PROMPT =
@@ -77,7 +79,7 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch, postDeps: Receipt
   assertFacilitatorSigned(quoted);
   console.log(describeQuote(quoted, cfg.spendCapWei));
 
-  const spent = committedWei(readReceiptLines(cfg.receiptsPath));
+  const spent = committedPaymentsWei(cfg.receiptsPath);
   const next = BigInt(quoted.accepted.amount);
   assertWithinCap({ capWei: cfg.spendCapWei, committedWei: spent, nextWei: next, label: "quote" });
   assertQuoteUsd(quoted, cfg.spendCapUsdWei);
@@ -85,7 +87,7 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch, postDeps: Receipt
   console.log(`  this quote fits the cap`);
 
   if (cfg.mode === "dry-run") {
-    writeDryRun(cfg, quoted);
+    await writeDryRun(cfg, quoted);
     return;
   }
 
@@ -155,7 +157,12 @@ async function runQuoted(cfg: Config, fetchImpl: typeof fetch, postDeps: Receipt
   }
 }
 
-function writeDryRun(cfg: Config, quote: ParsedQuote): void {
+function writeDryRun(cfg: Config, quote: ParsedQuote): Promise<void> {
+  return withFileLock(`${cfg.postsPath}.lock`, async () => writeDryRunLocked(cfg, quote));
+}
+
+function writeDryRunLocked(cfg: Config, quote: ParsedQuote): void {
+  const start = readReceiptLines(cfg.receiptsPath).length;
   const now = new Date();
   appendReceipt(
     cfg.receiptsPath,
@@ -205,7 +212,6 @@ function writeDryRun(cfg: Config, quote: ParsedQuote): void {
   if (log.namespaceId !== cfg.namespaceId) {
     throw new Error(`posts.json namespace is ${log.namespaceId}, config is ${cfg.namespaceId}`);
   }
-  const start = log.posts.reduce((max, post) => Math.max(max, post.lineEnd), 0);
   const fresh = lines.slice(start);
   const post = recordMockPost(log, fresh, start, now);
   writePostLog(cfg.postsPath, log);

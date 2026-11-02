@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { writeJsonAtomic } from "./files.ts";
 import { MOCHA_CHAIN, MOCHA_PUBLIC_RPC } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
 
@@ -58,15 +58,24 @@ export function readPostLog(path: string, namespaceId: string): PostLog {
 }
 
 export function writePostLog(path: string, log: PostLog): void {
-  const dir = dirname(path);
-  if (dir !== "." && dir !== "") mkdirSync(dir, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(log, null, 2)}\n`);
+  writeJsonAtomic(path, log);
 }
 
 export function unpostedLines(lines: string[], log: PostLog): { start: number; lines: string[] } {
-  const start = log.posts.reduce((max, post) => Math.max(max, post.lineEnd), 0);
-  if (start > lines.length) throw new Error("posts.json points past the end of the receipt log");
-  return { start, lines: lines.slice(start) };
+  if (log.posts.some((post) => post.lineEnd > lines.length)) throw new Error("posts.json points past the end of the receipt log");
+  const covered = lines.map((line, index) => log.posts.some((post) => {
+    if (index < post.lineStart || index >= post.lineEnd) return false;
+    if (!post.mock) return true;
+    // Old dry-runs sometimes covered earlier real receipts. Those still need publication.
+    const event = JSON.parse(line) as { type: string; dryRun?: boolean; checkoutId?: string; who?: string; what?: string };
+    return (event.type === "inference" && event.dryRun === true && !event.checkoutId) ||
+      (event.type === "sale" && event.checkoutId === "dry_run_not_a_stripe_payment") ||
+      (event.type === "human" && event.who === "demo" && event.what === "skipped the Eden deposit and the Mocha submit");
+  }));
+  const start = covered.indexOf(false);
+  if (start === -1) return { start: lines.length, lines: [] };
+  const nextCovered = covered.indexOf(true, start);
+  return { start, lines: lines.slice(start, nextCovered === -1 ? lines.length : nextCovered) };
 }
 
 export function recordMockPost(log: PostLog, lines: string[], start: number, now = new Date()): PostRecord {

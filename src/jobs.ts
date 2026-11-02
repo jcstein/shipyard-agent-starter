@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { withFileLock, writeJsonAtomic } from "./files.ts";
+import { currentJobOwner, jobOwnerIsRunning, type JobOwner } from "./job-owner.ts";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
 export const DEFAULT_TASK =
@@ -25,6 +26,9 @@ export type Job = {
    * The success page refreshes only while this is false. Absent on older jobs.
    */
   linksReady?: boolean;
+  ownerPid?: number;
+  owner?: JobOwner;
+  postError?: string | null;
 };
 
 export type JobLog = {
@@ -98,17 +102,16 @@ export function readJobLog(path: string): JobLog {
   return parsed;
 }
 
-export function writeJobLog(path: string, log: JobLog): void {
-  const dir = dirname(path);
-  if (dir !== "." && dir !== "") mkdirSync(dir, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(log, null, 2)}\n`);
+// Only called while holding the job log's shared mutation lock.
+function writeJobLog(path: string, log: JobLog): void {
+  writeJsonAtomic(path, log);
 }
 
 export function readJob(path: string, checkoutId: string): Job | null {
   return readJobLog(path).jobs.find((job) => job.checkoutId === checkoutId) ?? null;
 }
 
-export function claimJob(
+export async function claimJob(
   path: string,
   input: {
     checkoutId: string;
@@ -118,31 +121,81 @@ export function claimJob(
     dryRun: boolean;
   },
   now = new Date(),
-): { job: Job; claimed: boolean } {
-  const log = readJobLog(path);
-  const existing = log.jobs.find((job) => job.checkoutId === input.checkoutId);
-  if (existing) return { job: existing, claimed: false };
-  const job: Job = {
-    ...input,
-    status: "queued",
-    result: null,
-    error: null,
-    requestId: null,
-    createdAt: now.toISOString(),
-    finishedAt: null,
-  };
-  log.jobs.push(job);
-  writeJobLog(path, log);
-  return { job, claimed: true };
+): Promise<{ job: Job; claimed: boolean }> {
+  const owner = await currentJobOwner();
+  return withFileLock(`${path}.lock`, async () => {
+    const log = readJobLog(path);
+    const existing = log.jobs.find((job) => job.checkoutId === input.checkoutId);
+    if (existing) return { job: existing, claimed: false };
+    const job: Job = {
+      ...input,
+      ownerPid: process.pid,
+      owner,
+      status: "queued",
+      result: null,
+      error: null,
+      requestId: null,
+      createdAt: now.toISOString(),
+      finishedAt: null,
+    };
+    log.jobs.push(job);
+    writeJobLog(path, log);
+    return { job, claimed: true };
+  }, { waitMs: 5000 });
 }
 
-export function updateJob(path: string, checkoutId: string, patch: Partial<Job>): Job {
-  const log = readJobLog(path);
-  const job = log.jobs.find((item) => item.checkoutId === checkoutId);
-  if (!job) throw new Error(`no job for ${checkoutId}`);
-  Object.assign(job, patch);
-  writeJobLog(path, log);
-  return job;
+export async function updateJob(path: string, checkoutId: string, patch: Partial<Job>): Promise<Job> {
+  return withFileLock(`${path}.lock`, async () => {
+    const log = readJobLog(path);
+    const job = log.jobs.find((item) => item.checkoutId === checkoutId);
+    if (!job) throw new Error(`no job for ${checkoutId}`);
+    Object.assign(job, patch);
+    writeJobLog(path, log);
+    return job;
+  }, { waitMs: 5000 });
+}
+
+async function ownerIsRunning(job: Job): Promise<boolean> {
+  if (job.owner) return jobOwnerIsRunning(job.owner);
+  // This process cannot own a legacy claim: every new claim has an instance token.
+  const pid = job.ownerPid;
+  if (!pid || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+  }
+  throw new Error(`Cannot verify legacy job owner PID ${pid} for ${job.checkoutId}. Stop older webhook workers. Once no worker owns this job, remove only its ownerPid from jobs.json and restart; preserve the job and payment reservations. No jobs were recovered or payments retried.`);
+}
+
+/** Never replay an interrupted payment. Surface it for explicit review instead. */
+export async function recoverInterruptedJobs(path: string): Promise<void> {
+  const abandoned = new Map<string, Job>();
+  for (const job of readJobLog(path).jobs) {
+    if (job.status !== "queued" && job.status !== "running" && !(job.status === "done" && job.linksReady === false)) continue;
+    if (!await ownerIsRunning(job)) abandoned.set(job.checkoutId, job);
+  }
+  if (abandoned.size === 0) return;
+  await withFileLock(`${path}.lock`, async () => {
+    // Other workers can finish while ownership is checked; never overwrite that newer state.
+    const log = readJobLog(path);
+    let changed = false;
+    for (const job of log.jobs) {
+      const prior = abandoned.get(job.checkoutId);
+      if (!prior || job.ownerPid !== prior.ownerPid || JSON.stringify(job.owner) !== JSON.stringify(prior.owner)) continue;
+      if (job.status === "queued" || job.status === "running") {
+        job.status = "failed";
+        job.error = "This job was interrupted. No automatic retry was made. Inspect the payment reservations, receipts, and trace before starting another paid checkout; a deposit may already have been sent.";
+        job.finishedAt = new Date().toISOString();
+        changed = true;
+      } else if (job.status === "done" && job.linksReady === false) {
+        job.linksReady = true;
+        job.postError = "Receipt publication was interrupted. The result is saved. Inspect any pending Mocha submission before using npm run post.";
+        changed = true;
+      }
+    }
+    if (changed) writeJobLog(path, log);
+  }, { waitMs: 5000 });
 }
 
 function escapeHtml(value: string): string {
@@ -210,13 +263,14 @@ export function renderSuccess(input: { sessionId: string | null; job: Job | null
     ? "Mock inference. No Houston call was made and no TIA was spent."
     : "Houston inference finished.";
   const waiting =
-    job.linksReady === false
+    job.linksReady === false && !input.links?.mochaUrl
       ? `<meta http-equiv="refresh" content="2"><p class="status">Posting the receipt to Mocha.</p>`
       : "";
   const links = explorerList(input.links);
+  const postError = job.postError && !input.links?.mochaUrl ? `<p class="status">${escapeHtml(job.postError)}</p>` : "";
   return page(
     title,
-    `${waiting}<h1>${title}</h1><section><h2>Task</h2><pre>${escapeHtml(job.task)}</pre></section><section><h2>Result</h2><pre>${escapeHtml(job.result ?? "")}</pre></section><p class="status">${kind}</p>${links}<p class="meta">${revenueLine(job.livemode)}</p>`,
+    `${waiting}<h1>${title}</h1><section><h2>Task</h2><pre>${escapeHtml(job.task)}</pre></section><section><h2>Result</h2><pre>${escapeHtml(job.result ?? "")}</pre></section><p class="status">${kind}</p>${postError}${links}<p class="meta">${revenueLine(job.livemode)}</p>`,
   );
 }
 

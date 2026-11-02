@@ -44,7 +44,7 @@ The dry-run `sale` line uses `checkoutId: "dry_run_not_a_stripe_payment"` and `a
 | --- | --- |
 | `npm run preflight` | Reads the Eden address, TIA balance, and a fresh 402. Prints go or no-go. Does not sign or broadcast. |
 | `npm run demo` | Dry-run by default (local mock post, no Mocha submit). `DEMO_MODE=live` pays for one completion and then posts unposted receipt lines to Mocha. |
-| `npm run celestia:build` | Builds the Mocha helper with Go 1.25.1. |
+| `npm run celestia:build` | Builds the Mocha helper with Go 1.25.8. |
 | `npm run celestia:address` | Prints the celestia address to fund from the Mocha faucet. |
 | `npm run celestia:head` | Reads the public Mocha DA chain head. |
 | `npm run verify` | Checks the hash chain, prints GBP in and TIA out for a checkout job, and reads a real Mocha blob back when one was posted. |
@@ -134,7 +134,21 @@ Open the Checkout URL from the third terminal. The same test card applies. If `W
 
 ## Spend cap
 
-`SPEND_CAP_TIA` (default `0.05`) is enforced here, before a transaction is signed. It is not a hint to the model. The cap is the sum of live quotes already deposited plus this quote (and, on the live path, the deposit's max gas). Dry-run lines are not counted. An optional `SPEND_CAP_USD` compares the quote against the TIA/USD price inside the 402. The £100 hackathon budget is not a balance this process holds.
+`SPEND_CAP_TIA` (default `0.05`) is enforced here, before a transaction is signed. It is not a hint to the model. The cap includes live quotes from existing receipts and durable deposit-plus-max-gas reservations. Before submission, a reservation is atomically saved in `receipts.jsonl.payments.json` (or `<RECEIPTS_PATH>.payments.json`). A payment id is counted once even when both its receipt and reservation exist. A timeout, rejected response, or process exit does not release its reservation. Dry-run lines are not counted. An optional `SPEND_CAP_USD` compares the quote against the TIA/USD price inside the 402. The £100 hackathon budget is not a balance this process holds.
+
+Payments sharing `RECEIPTS_PATH` are serialized within one process. A second process using that path fails closed while its payment lock is held. Keep the same receipt/reservation files when restarting; changing paths starts separate accounting. Reservations conservatively retain max gas and the quote ceiling, even if settlement costs less. Do not delete them to retry an uncertain payment.
+
+### Interrupted work and publication
+
+On webhook startup, unfinished jobs whose owner process has stopped are marked failed with review instructions. Each worker proves its instance token through a local Unix socket; a reused PID does not keep an abandoned job running. An unresponsive owner stops startup instead of failing possibly active work. Job files and owner sockets are for workers on the same local machine, not shared storage across hosts. Jobs are never paid again automatically, and replaying the webhook still cannot start another job. A completed result survives an interrupted Mocha post; its page shows recovery instructions instead of refreshing forever. A recorded catch-up post supplies the blob link and clears that waiting display.
+
+Stop older webhook workers before upgrading. For older PID-only records, a live foreign PID cannot prove which process claimed the job, so startup stops with the affected checkout id. After confirming no old worker owns that job, remove only its `ownerPid` from `jobs.json` and restart. Keep the job and payment reservations; recovery marks the job interrupted without replaying it. There is no need to terminate an unrelated process whose PID was reused.
+
+Every job claim, update, and recovery write holds `<JOBS_PATH>.lock` across its read and atomic replacement. Job writers wait up to five seconds for another process's short file write; ownership probes and external calls happen outside that lock. This prevents a recovery snapshot from replacing a completion saved by another local worker.
+
+Posting is serialized using `<POSTS_PATH>.lock`; payments use `<RECEIPTS_PATH>.payment.lock`. Normal completion removes these locks and the job lock. A killed process deliberately leaves its lock in place: stop all processes using those files, inspect the job records, trace and transaction/blob outcome, and only then remove the specific abandoned lock. Keep the jobs and payment reservations. For Mocha, a submit may have succeeded before its record was saved, so blindly retrying can publish a duplicate. After checking that outcome, `npm run post` can catch up unposted lines. No recovery command sends another Eden deposit.
+
+Dry-run mock records cover only the demo's new lines. Catch-up also recognizes older mixed mock records and still publishes the checkout receipts they accidentally covered, including mock inference from a dry-run Stripe checkout; standalone demo lines remain local.
 
 The private key is read from `EDEN_PRIVATE_KEY` and used only to derive the address and to sign. It is never written to a receipt, a blob, the chat prompt, or a live trace. Receipts store `sha256` of the payment header, not the signature. A live trace does store the signed deposit transaction and the `Payment-Signature` header.
 
@@ -235,7 +249,7 @@ Mocha-5 is a testnet. A blob there proves the bytes were published, nothing more
 
 `npm run post` and `npm run verify` shell out to `celestia/mocha-helper`. The helper uses the official celestia-node Go client (`github.com/celestiaorg/celestia-node/api/client`, tag `v0.28.2-mocha`). It submits the existing receipt bytes — the same JSON `blobPayload` already builds, under the `shipyardmm` namespace — to the public Mocha core gRPC endpoint `public-endpoint.celestia-mocha.quiknode.pro:9090` with TLS. It reads them back from the public DA JSON-RPC `https://public-endpoint.celestia-mocha.quiknode.pro`. You do not run a light node for this path.
 
-The helper builds with Go 1.25.x. Go 1.26 is not supported by a transitive dependency (`bytedance/sonic`). `npm run celestia:build` sets `GOTOOLCHAIN=go1.25.1`, so the `go` on your PATH can be older or newer.
+The helper builds with Go 1.25.x. Go 1.26 is not supported by a transitive dependency (`bytedance/sonic`). `npm run celestia:build` sets `GOTOOLCHAIN=go1.25.8`, so the `go` on your PATH can be older or newer.
 
 ```bash
 npm run celestia:build

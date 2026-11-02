@@ -1,4 +1,6 @@
-import { getBytes, hashMessage, Interface, recoverAddress, Wallet } from "ethers";
+import { getBytes, hashMessage, Interface, keccak256, recoverAddress, Wallet } from "ethers";
+import { withFileLock } from "./files.ts";
+import { committedPaymentsWei, reservePayment } from "./payments.ts";
 import type { Config, SignField } from "./config.ts";
 import { assertPrivateKey } from "./config.ts";
 import { EDEN_CHAIN_ID, EDEN_NETWORK, EXPLORER, edenTxUrl } from "./eden.ts";
@@ -444,7 +446,11 @@ export async function requestDepositBuild(input: {
   return readDepositBuild(built.status, built.json, input.quote, input.escrow);
 }
 
-export async function payAndComplete(input: {
+export function payAndComplete(input: Parameters<typeof payLocked>[0]): ReturnType<typeof payLocked> {
+  return withFileLock(`${input.cfg.receiptsPath}.payment.lock`, () => payLocked(input));
+}
+
+async function payLocked(input: {
   cfg: Config;
   quote: ParsedQuote;
   messages: ChatMessage[];
@@ -466,9 +472,11 @@ export async function payAndComplete(input: {
   const fetchImpl = input.fetchImpl ?? fetch;
   assertQuoteFresh(input.quote);
   const quoted = asWei("quote amount", input.quote.accepted.amount);
+  const persisted = committedPaymentsWei(input.cfg.receiptsPath);
+  const committed = persisted > input.committedWei ? persisted : input.committedWei;
   assertWithinCap({
     capWei: input.cfg.spendCapWei,
-    committedWei: input.committedWei,
+    committedWei: committed,
     nextWei: quoted,
     label: "quote",
   });
@@ -485,7 +493,7 @@ export async function payAndComplete(input: {
   const gas = maxGasWei(tx);
   assertWithinCap({
     capWei: input.cfg.spendCapWei,
-    committedWei: input.committedWei,
+    committedWei: committed,
     nextWei: quoted + gas,
     label: "deposit plus gas",
   });
@@ -502,31 +510,44 @@ export async function payAndComplete(input: {
     maxPriorityFeePerGas: asWei("maxPriorityFeePerGas", tx.maxPriorityFeePerGas),
   });
 
-  const sent = await postJson(
-    fetchImpl,
-    `${input.cfg.houstonBase}/deposit/send`,
-    { signedTx, paymentId: input.quote.accepted.extra.paymentId },
-    "deposit-send",
-  );
-  const deprecated = deprecationNote(sent.headers.get("deprecation"));
-  if (deprecated) console.log(deprecated);
-  if (sent.status !== 200) {
-    throw new PaidRequestError(
-      `deposit/send failed (${sent.status}): ${errorMessage(sent.json, "broadcast failed")}`,
-      null,
-    );
-  }
-  let depositTxHash: string;
+  const transactionHash = keccak256(signedTx);
+  reservePayment(input.cfg.receiptsPath, {
+    paymentId: input.quote.accepted.extra.paymentId,
+    amountWei: String(quoted + gas),
+    txHash: transactionHash,
+  });
+
+  // From here every send/status error must keep its durable spend reservation.
+  let depositTxHash = transactionHash;
   try {
-    depositTxHash = readDepositSend(sent.json, input.quote.accepted.extra.paymentId).txHash;
+    const sent = await postJson(
+      fetchImpl,
+      `${input.cfg.houstonBase}/deposit/send`,
+      { signedTx, paymentId: input.quote.accepted.extra.paymentId },
+      "deposit-send",
+    );
+    const deprecated = deprecationNote(sent.headers.get("deprecation"));
+    if (deprecated) console.log(deprecated);
+    if (sent.status !== 200) {
+      throw new PaidRequestError(
+        `deposit/send failed (${sent.status}): ${errorMessage(sent.json, "broadcast failed")}`,
+        null,
+      );
+    }
+    try {
+      depositTxHash = readDepositSend(sent.json, input.quote.accepted.extra.paymentId).txHash;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new PaidRequestError(
+        `${message} deposit/send returned HTTP ${sent.status}. If the explorer shows the transaction, do not deposit this paymentId again. The response body is in the trace.`,
+        null,
+      );
+    }
+    await waitForDeposit(input.cfg.houstonBase, depositTxHash, fetchImpl);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new PaidRequestError(
-      `${message} deposit/send returned HTTP ${sent.status}. If the explorer shows the transaction, do not deposit this paymentId again. The response body is in the trace.`,
-      null,
-    );
+    throw new PaidRequestError(`${message} Deposit outcome may be uncertain: ${depositTxHash}. Its quote plus max gas remains reserved. Inspect the trace and explorer before doing anything else; do not automatically retry.`, depositTxHash);
   }
-  await waitForDeposit(input.cfg.houstonBase, depositTxHash, fetchImpl);
 
   const attempt = async (field: SignField, step: string) => {
     const signature = await signPayment(privateKey, input.quote, field);

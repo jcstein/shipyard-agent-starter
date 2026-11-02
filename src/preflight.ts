@@ -1,3 +1,4 @@
+import { committedPaymentsWei } from "./payments.ts";
 import { Wallet } from "ethers";
 import type { Config } from "./config.ts";
 import { assertPrivateKey } from "./config.ts";
@@ -13,7 +14,6 @@ import {
   type ParsedQuote,
 } from "./houston.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
-import { committedWei, readReceiptLines } from "./receipts.ts";
 import { DEMO_MESSAGES } from "./run.ts";
 
 export type PreflightReport = {
@@ -94,7 +94,7 @@ export async function runPreflight(cfg: Config, deps?: { fetchImpl?: typeof fetc
     gasWei: null,
     needWei: null,
     capWei: cfg.spendCapWei,
-    committedWei: committedWei(readReceiptLines(cfg.receiptsPath)),
+    committedWei: committedPaymentsWei(cfg.receiptsPath),
     paymentId: null,
     expiresAt: null,
     unsignedBuild: false,

@@ -1,3 +1,4 @@
+import { committedPaymentsWei } from "./payments.ts";
 import type { Config } from "./config.ts";
 import { edenTxUrl } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
@@ -14,7 +15,7 @@ import {
 import { updateJob, type Job } from "./jobs.ts";
 import { mochaBlobUrlForCheckout, postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
-import { appendReceipt, committedWei, findByCheckout, readReceiptLines } from "./receipts.ts";
+import { appendReceipt, findByCheckout } from "./receipts.ts";
 import { openPaymentTrace, redactSecrets, tracingFetch, type Tracer } from "./trace.ts";
 
 export function mockInferenceText(task: string): string {
@@ -30,8 +31,8 @@ function safeError(cfg: Config, error: unknown): string {
   return scrubbed.length > 2000 ? `${scrubbed.slice(0, 2000)}…` : scrubbed;
 }
 
-function finish(cfg: Config, job: Job, result: string, requestId: string, dryRun: boolean): void {
-  updateJob(cfg.jobsPath, job.checkoutId, {
+async function finish(cfg: Config, job: Job, result: string, requestId: string, dryRun: boolean): Promise<void> {
+  await updateJob(cfg.jobsPath, job.checkoutId, {
     status: "done",
     result,
     error: null,
@@ -77,10 +78,10 @@ export async function fulfillCheckout(
 ): Promise<void> {
   let succeeded = false;
   try {
-    updateJob(cfg.jobsPath, job.checkoutId, { status: "running" });
+    await updateJob(cfg.jobsPath, job.checkoutId, { status: "running" });
     const prior = findByCheckout(cfg.receiptsPath, "inference", job.checkoutId);
     if (prior && prior.type === "inference") {
-      finish(
+      await finish(
         cfg,
         job,
         job.result ?? "Inference receipt already recorded for this checkout.",
@@ -92,7 +93,7 @@ export async function fulfillCheckout(
       return;
     }
     if (cfg.mode !== "live") {
-      writeMock(cfg, job);
+      await writeMock(cfg, job);
       succeeded = true;
       return;
     }
@@ -101,7 +102,7 @@ export async function fulfillCheckout(
   } catch (error) {
     const message = safeError(cfg, error);
     try {
-      updateJob(cfg.jobsPath, job.checkoutId, {
+      await updateJob(cfg.jobsPath, job.checkoutId, {
         status: "failed",
         error: message,
         finishedAt: new Date().toISOString(),
@@ -114,14 +115,14 @@ export async function fulfillCheckout(
     if (!succeeded) return;
     await postUnpostedReceipts(cfg, postDeps, `job ${job.checkoutId}`);
     try {
-      updateJob(cfg.jobsPath, job.checkoutId, { linksReady: true });
+      await updateJob(cfg.jobsPath, job.checkoutId, { linksReady: true });
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
     }
   }
 }
 
-function writeMock(cfg: Config, job: Job): void {
+async function writeMock(cfg: Config, job: Job): Promise<void> {
   const text = mockInferenceText(job.task);
   const requestId = `dry-run:${job.checkoutId}`;
   appendReceipt(cfg.receiptsPath, {
@@ -140,7 +141,7 @@ function writeMock(cfg: Config, job: Job): void {
     checkoutId: job.checkoutId,
     stripePaymentId: job.stripePaymentId,
   });
-  finish(cfg, job, text, requestId, true);
+  await finish(cfg, job, text, requestId, true);
   console.log(`job ${job.checkoutId} done. Mock inference, no TIA spent. Test-mode payments are not revenue.`);
   console.log(`Result: ${oneLine(text)}`);
 }
@@ -174,7 +175,7 @@ async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promis
       throw new Error("expected a 402 quote. The endpoint returned a completion without payment.");
     }
     assertFacilitatorSigned(quoted);
-    const spent = committedWei(readReceiptLines(cfg.receiptsPath));
+    const spent = committedPaymentsWei(cfg.receiptsPath);
     const next = BigInt(quoted.accepted.amount);
     assertWithinCap({ capWei: cfg.spendCapWei, committedWei: spent, nextWei: next, label: "quote" });
     assertQuoteUsd(quoted, cfg.spendCapUsdWei);
@@ -204,7 +205,7 @@ async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promis
         checkoutId: job.checkoutId,
         stripePaymentId: job.stripePaymentId,
       });
-      finish(cfg, job, text, quoted.accepted.extra.paymentId, false);
+      await finish(cfg, job, text, quoted.accepted.extra.paymentId, false);
       const depositUrl = edenTxUrl(paid.depositTxHash);
       console.log(`Houston: ${oneLine(text)}`);
       console.log(`deposit: ${paid.depositTxHash} ${depositUrl}`);

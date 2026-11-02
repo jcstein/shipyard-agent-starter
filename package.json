@@ -12,7 +12,7 @@
     "preflight": "node --env-file-if-exists=.env src/preflight-cli.ts",
     "verify": "node --env-file-if-exists=.env src/verify.ts",
     "post": "node --env-file-if-exists=.env src/post.ts",
-    "celestia:build": "cd celestia && GOTOOLCHAIN=go1.25.1 go build -o mocha-helper .",
+    "celestia:build": "cd celestia && GOTOOLCHAIN=go1.25.8 go build -o mocha-helper .",
     "celestia:address": "node --env-file-if-exists=.env src/celestia-cmd.ts address",
     "celestia:head": "node --env-file-if-exists=.env src/celestia-cmd.ts head",
     "checkout": "node --env-file-if-exists=.env src/checkout.ts",
