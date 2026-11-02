@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Config } from "./config.ts";
 import { fulfillCheckout, successExplorerLinks } from "./fulfill.ts";
-import { claimJob, readJob, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
+import { claimJob, readJob, recoverInterruptedJobs, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
 import type { ReceiptPostDeps } from "./mocha.ts";
 import { gbpFromPence, penceFromGbp } from "./money.ts";
 import { appendReceipt, findByCheckout } from "./receipts.ts";
@@ -183,6 +183,7 @@ export type WebhookOptions = {
 
 export function startWebhook(cfg: Config, options: WebhookOptions = {}): Server {
   if (!cfg.stripeWebhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is required");
+  recoverInterruptedJobs(cfg.jobsPath);
   const runJob =
     options.runJob ??
     ((config, job) => fulfillCheckout(config, job, options.fetchImpl ?? fetch, options.postDeps));

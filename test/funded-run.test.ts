@@ -360,7 +360,6 @@ describe("paid retry", () => {
   });
 
   it("does not flip the sign field on a 500, a missing-header 402, or an unrelated 403", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "retry-500-"));
     const wallet = Wallet.createRandom();
     const fresh = freshQuote();
     const serverError = scripted([
@@ -372,7 +371,7 @@ describe("paid retry", () => {
     await assert.rejects(
       () =>
         payAndComplete({
-          cfg: config(dir, wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
+          cfg: config(mkdtempSync(join(tmpdir(), "retry-isolated-")), wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
           quote: fresh.quote,
           messages: [{ role: "user", content: "hi" }],
           committedWei: 0n,
@@ -395,7 +394,7 @@ describe("paid retry", () => {
     await assert.rejects(
       () =>
         payAndComplete({
-          cfg: config(dir, wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
+          cfg: config(mkdtempSync(join(tmpdir(), "retry-isolated-")), wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
           quote: fresh.quote,
           messages: [{ role: "user", content: "hi" }],
           committedWei: 0n,
@@ -415,7 +414,7 @@ describe("paid retry", () => {
     await assert.rejects(
       () =>
         payAndComplete({
-          cfg: config(dir, wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
+          cfg: config(mkdtempSync(join(tmpdir(), "retry-isolated-")), wallet.privateKey, { HOUSTON_RETRY_OTHER_SIGN_FIELD: "1" }),
           quote: fresh.quote,
           messages: [{ role: "user", content: "hi" }],
           committedWei: 0n,

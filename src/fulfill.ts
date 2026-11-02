@@ -1,3 +1,4 @@
+import { committedPaymentsWei } from "./payments.ts";
 import type { Config } from "./config.ts";
 import { edenTxUrl } from "./eden.ts";
 import { sha256Hex } from "./hash.ts";
@@ -14,7 +15,7 @@ import {
 import { updateJob, type Job } from "./jobs.ts";
 import { mochaBlobUrlForCheckout, postUnpostedReceipts, type ReceiptPostDeps } from "./mocha.ts";
 import { assertWithinCap, formatTia } from "./money.ts";
-import { appendReceipt, committedWei, findByCheckout, readReceiptLines } from "./receipts.ts";
+import { appendReceipt, findByCheckout } from "./receipts.ts";
 import { openPaymentTrace, redactSecrets, tracingFetch, type Tracer } from "./trace.ts";
 
 export function mockInferenceText(task: string): string {
@@ -174,7 +175,7 @@ async function writeLive(cfg: Config, job: Job, fetchImpl: typeof fetch): Promis
       throw new Error("expected a 402 quote. The endpoint returned a completion without payment.");
     }
     assertFacilitatorSigned(quoted);
-    const spent = committedWei(readReceiptLines(cfg.receiptsPath));
+    const spent = committedPaymentsWei(cfg.receiptsPath);
     const next = BigInt(quoted.accepted.amount);
     assertWithinCap({ capWei: cfg.spendCapWei, committedWei: spent, nextWei: next, label: "quote" });
     assertQuoteUsd(quoted, cfg.spendCapUsdWei);

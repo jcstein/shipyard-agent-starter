@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { blobPayload, mochaReadHint, readPostLog, submitReceiptBlob, unpostedLines, v0Namespace, writePostLog } from "./celestia.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { MOCHA_CHAIN, MOCHA_EXPLORER, MOCHA_FAUCET } from "./eden.ts";
+import { withFileLock } from "./files.ts";
 import { sha256Hex } from "./hash.ts";
 import { readReceiptLines } from "./receipts.ts";
 
@@ -206,56 +207,62 @@ export async function postReceipts(
   deps: ReceiptPostDeps & { cfg?: Config } = {},
 ): Promise<string[]> {
   const cfg = deps.cfg ?? loadConfig(env);
-  const lines = readReceiptLines(cfg.receiptsPath);
-  const log = readPostLog(cfg.postsPath, cfg.namespaceId);
-  if (log.namespaceId !== cfg.namespaceId) {
-    throw new Error(`posts.json namespace is ${log.namespaceId}, config is ${cfg.namespaceId}`);
-  }
-  const pending = unpostedLines(lines, log);
-  if (pending.lines.length === 0) {
-    const mocks = log.posts.filter((post) => post.mock).length;
-    if (mocks > 0 && mocks === log.posts.length) {
-      return [
-        "No unposted receipt lines. The recorded post is a local mock and was not sent to Mocha. A live inference, a Stripe sale, or `npm run human` adds lines you can submit.",
+  return withFileLock(`${cfg.postsPath}.lock`, async () => {
+    const allNotes: string[] = [];
+    while (true) {
+      const lines = readReceiptLines(cfg.receiptsPath);
+      const log = readPostLog(cfg.postsPath, cfg.namespaceId);
+      if (log.namespaceId !== cfg.namespaceId) {
+        throw new Error(`posts.json namespace is ${log.namespaceId}, config is ${cfg.namespaceId}`);
+      }
+      const pending = unpostedLines(lines, log);
+      if (pending.lines.length === 0) {
+        if (allNotes.length > 0) return allNotes;
+        const mocks = log.posts.filter((post) => post.mock).length;
+        if (mocks > 0 && mocks === log.posts.length) {
+          return [
+            "No unposted receipt lines. The recorded post is a local mock and was not sent to Mocha. A live inference, a Stripe sale, or `npm run human` adds lines you can submit.",
+          ];
+        }
+        return ["No unposted receipt lines."];
+      }
+      const posted = cfg.celestiaRpc
+        ? await submitReceiptBlob({
+            rpcUrl: cfg.celestiaRpc,
+            token: cfg.celestiaToken,
+            namespaceId: cfg.namespaceId,
+            lines: pending.lines,
+            fetchImpl: deps.fetchImpl,
+          })
+        : await submitWithHelper(cfg, pending.lines, deps.run ?? runMochaHelper);
+      log.posts.push({
+        at: new Date().toISOString(),
+        lineStart: pending.start,
+        lineEnd: pending.start + pending.lines.length,
+        mock: false,
+        height: posted.height,
+        commitment: posted.commitment,
+        payloadSha256: posted.payloadSha256,
+      });
+      writePostLog(cfg.postsPath, log);
+      const notes = [
+        `Submitted ${pending.lines.length} lines to Mocha (${cfg.namespaceId}).`,
+        `height ${posted.height} ${mochaBlobUrl(posted.height, posted.commitment, cfg.namespaceId)}`,
+        `commitment ${posted.commitment}`,
       ];
+      const helperAddress = "address" in posted && typeof posted.address === "string" ? posted.address : "";
+      const helperBalance = "balance" in posted && typeof posted.balance === "string" ? posted.balance : "";
+      const helperStderr = "stderr" in posted && typeof posted.stderr === "string" ? posted.stderr : "";
+      if (helperAddress) notes.push(`address ${helperAddress}`);
+      if (helperBalance) notes.push(`balance ${helperBalance}`);
+      for (const line of helperStderr.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("New Mocha key.") || trimmed.startsWith("Fund this address")) notes.push(trimmed);
+      }
+      notes.push("Mocha is testnet. This blob is a log, not revenue.");
+      allNotes.push(...notes);
     }
-    return ["No unposted receipt lines."];
-  }
-  const posted = cfg.celestiaRpc
-    ? await submitReceiptBlob({
-        rpcUrl: cfg.celestiaRpc,
-        token: cfg.celestiaToken,
-        namespaceId: cfg.namespaceId,
-        lines: pending.lines,
-        fetchImpl: deps.fetchImpl,
-      })
-    : await submitWithHelper(cfg, pending.lines, deps.run ?? runMochaHelper);
-  log.posts.push({
-    at: new Date().toISOString(),
-    lineStart: pending.start,
-    lineEnd: pending.start + pending.lines.length,
-    mock: false,
-    height: posted.height,
-    commitment: posted.commitment,
-    payloadSha256: posted.payloadSha256,
   });
-  writePostLog(cfg.postsPath, log);
-  const notes = [
-    `Submitted ${pending.lines.length} lines to Mocha (${cfg.namespaceId}).`,
-    `height ${posted.height} ${mochaBlobUrl(posted.height, posted.commitment, cfg.namespaceId)}`,
-    `commitment ${posted.commitment}`,
-  ];
-  const helperAddress = "address" in posted && typeof posted.address === "string" ? posted.address : "";
-  const helperBalance = "balance" in posted && typeof posted.balance === "string" ? posted.balance : "";
-  const helperStderr = "stderr" in posted && typeof posted.stderr === "string" ? posted.stderr : "";
-  if (helperAddress) notes.push(`address ${helperAddress}`);
-  if (helperBalance) notes.push(`balance ${helperBalance}`);
-  for (const line of helperStderr.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("New Mocha key.") || trimmed.startsWith("Fund this address")) notes.push(trimmed);
-  }
-  notes.push("Mocha is testnet. This blob is a log, not revenue.");
-  return notes;
 }
 
 /** What to print when an automatic Mocha post fails. The receipt log is left as it is. */

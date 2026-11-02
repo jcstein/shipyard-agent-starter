@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { writeJsonAtomic } from "./files.ts";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
 export const DEFAULT_TASK =
@@ -25,6 +25,8 @@ export type Job = {
    * The success page refreshes only while this is false. Absent on older jobs.
    */
   linksReady?: boolean;
+  ownerPid?: number;
+  postError?: string | null;
 };
 
 export type JobLog = {
@@ -99,9 +101,7 @@ export function readJobLog(path: string): JobLog {
 }
 
 export function writeJobLog(path: string, log: JobLog): void {
-  const dir = dirname(path);
-  if (dir !== "." && dir !== "") mkdirSync(dir, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(log, null, 2)}\n`);
+  writeJsonAtomic(path, log);
 }
 
 export function readJob(path: string, checkoutId: string): Job | null {
@@ -124,6 +124,7 @@ export function claimJob(
   if (existing) return { job: existing, claimed: false };
   const job: Job = {
     ...input,
+    ownerPid: process.pid,
     status: "queued",
     result: null,
     error: null,
@@ -143,6 +144,36 @@ export function updateJob(path: string, checkoutId: string, patch: Partial<Job>)
   Object.assign(job, patch);
   writeJobLog(path, log);
   return job;
+}
+
+function ownerIsRunning(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/** Never replay an interrupted payment. Surface it for explicit review instead. */
+export function recoverInterruptedJobs(path: string): void {
+  const log = readJobLog(path);
+  let changed = false;
+  for (const job of log.jobs) {
+    if (ownerIsRunning(job.ownerPid)) continue;
+    if (job.status === "queued" || job.status === "running") {
+      job.status = "failed";
+      job.error = "This job was interrupted. No automatic retry was made. Inspect the payment reservations, receipts, and trace before starting another paid checkout; a deposit may already have been sent.";
+      job.finishedAt = new Date().toISOString();
+      changed = true;
+    } else if (job.status === "done" && job.linksReady === false) {
+      job.linksReady = true;
+      job.postError = "Receipt publication was interrupted. The result is saved. Inspect any pending Mocha submission before using npm run post.";
+      changed = true;
+    }
+  }
+  if (changed) writeJobLog(path, log);
 }
 
 function escapeHtml(value: string): string {
@@ -210,13 +241,14 @@ export function renderSuccess(input: { sessionId: string | null; job: Job | null
     ? "Mock inference. No Houston call was made and no TIA was spent."
     : "Houston inference finished.";
   const waiting =
-    job.linksReady === false
+    job.linksReady === false && !input.links?.mochaUrl
       ? `<meta http-equiv="refresh" content="2"><p class="status">Posting the receipt to Mocha.</p>`
       : "";
   const links = explorerList(input.links);
+  const postError = job.postError && !input.links?.mochaUrl ? `<p class="status">${escapeHtml(job.postError)}</p>` : "";
   return page(
     title,
-    `${waiting}<h1>${title}</h1><section><h2>Task</h2><pre>${escapeHtml(job.task)}</pre></section><section><h2>Result</h2><pre>${escapeHtml(job.result ?? "")}</pre></section><p class="status">${kind}</p>${links}<p class="meta">${revenueLine(job.livemode)}</p>`,
+    `${waiting}<h1>${title}</h1><section><h2>Task</h2><pre>${escapeHtml(job.task)}</pre></section><section><h2>Result</h2><pre>${escapeHtml(job.result ?? "")}</pre></section><p class="status">${kind}</p>${postError}${links}<p class="meta">${revenueLine(job.livemode)}</p>`,
   );
 }
 
