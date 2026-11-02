@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Config } from "./config.ts";
 import { fulfillCheckout, successExplorerLinks } from "./fulfill.ts";
-import { checkoutTaskDefault, claimJob, readJob, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
+import { DEFAULT_TASK, claimJob, readJob, renderSuccess, taskFromSession, type Job, type SessionTaskSource } from "./jobs.ts";
 import type { ReceiptPostDeps } from "./mocha.ts";
 import { gbpFromPence, penceFromGbp } from "./money.ts";
 import { appendReceipt, findByCheckout } from "./receipts.ts";
@@ -86,7 +86,7 @@ export async function createCheckout(
   form.set("custom_fields[0][type]", "text");
   form.set("custom_fields[0][optional]", task ? "true" : "false");
   form.set("custom_fields[0][text][maximum_length]", "255");
-  if (!task) form.set("custom_fields[0][text][default_value]", checkoutTaskDefault());
+  if (!task) form.set("custom_fields[0][text][default_value]", DEFAULT_TASK);
   if (task) form.set("metadata[task]", task);
   const res = await fetchImpl("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST",

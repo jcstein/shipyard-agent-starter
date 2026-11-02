@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadConfig } from "../src/config.ts";
-import { checkoutTaskDefault } from "../src/jobs.ts";
+import { DEFAULT_TASK } from "../src/jobs.ts";
 import type { HelperRun } from "../src/mocha.ts";
 import { readReceiptLines } from "../src/receipts.ts";
 import { createCheckout, recordSale, settleJobs, startWebhook, verifyStripeSignature, withCheckoutSessionId } from "../src/stripe.ts";
@@ -66,7 +66,7 @@ describe("stripe", () => {
     assert.equal(params.get("success_url"), "http://localhost:8787/success?session_id={CHECKOUT_SESSION_ID}");
     assert.equal(params.get("custom_fields[0][key]"), "task");
     assert.equal(params.get("custom_fields[0][optional]"), "false");
-    assert.equal(params.get("custom_fields[0][text][default_value]"), checkoutTaskDefault());
+    assert.equal(params.get("custom_fields[0][text][default_value]"), DEFAULT_TASK);
     assert.equal(params.get("metadata[task]"), null);
   });
 

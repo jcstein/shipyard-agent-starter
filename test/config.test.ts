@@ -13,8 +13,11 @@ describe("HOUSTON_MAX_TOKENS", () => {
   it("defaults to 128 for the one-sentence pitch", () => {
     assert.equal(loadConfig({}).maxTokens, 128);
     assert.equal(DEMO_MESSAGES[0]?.content, DEFAULT_TASK);
+    assert.ok(DEFAULT_TASK.length <= 255);
     assert.match(DEFAULT_TASK, /one sentence/);
     assert.match(DEFAULT_TASK, /£15–£30/);
+    assert.match(DEFAULT_TASK, /zero or one human approval/);
+    assert.match(DEFAULT_TASK, /Do not spend money/);
   });
 
   it("keeps the 1–4096 range", () => {

@@ -12,7 +12,7 @@ import { loadConfig, type Config } from "../src/config.ts";
 import { NATIVE_ESCROW, edenTxUrl } from "../src/eden.ts";
 import { fulfillCheckout } from "../src/fulfill.ts";
 import { parsePaymentRequired, type ParsedQuote } from "../src/houston.ts";
-import { checkoutTaskDefault, claimJob, DEFAULT_TASK, readJob, renderSuccess, taskFromArgv, taskFromSession } from "../src/jobs.ts";
+import { claimJob, DEFAULT_TASK, readJob, renderSuccess, taskFromArgv, taskFromSession } from "../src/jobs.ts";
 import { mochaBlobUrl, postUnpostedReceipts, type HelperRun } from "../src/mocha.ts";
 import { appendReceipt, readReceiptLines } from "../src/receipts.ts";
 import { createCheckout, recordSale, settleJobs, startWebhook, stripePaymentId } from "../src/stripe.ts";
@@ -144,22 +144,8 @@ describe("checkout task", () => {
       }),
       "from the page",
     );
-    assert.equal(
-      taskFromSession({ custom_fields: [{ key: "task", text: { value: checkoutTaskDefault() } }] }),
-      DEFAULT_TASK,
-    );
     assert.equal(taskFromSession({}), DEFAULT_TASK);
-  });
-
-  it("fits the checkout default into Stripe's 255-character text field", () => {
-    const shown = checkoutTaskDefault();
-    assert.ok(shown.length > 0 && shown.length <= 255);
-    assert.equal(DEFAULT_TASK.startsWith(shown), true);
-    assert.equal(shown === DEFAULT_TASK || DEFAULT_TASK[shown.length] === " ", true);
-    assert.equal(
-      taskFromSession({ custom_fields: [{ key: "task", text: { value: shown.slice(0, -1) } }] }),
-      shown.slice(0, -1),
-    );
+    assert.ok(DEFAULT_TASK.length <= 255);
   });
 
   it("puts the CLI task in metadata and leaves the page field optional", async () => {
