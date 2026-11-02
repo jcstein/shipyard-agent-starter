@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { writeJsonAtomic } from "./files.ts";
+import { currentJobOwner, jobOwnerIsRunning, type JobOwner } from "./job-owner.ts";
 
 /** Same sentence as the dry-run demo, used when the Checkout Session has no task. */
 export const DEFAULT_TASK =
@@ -26,6 +27,7 @@ export type Job = {
    */
   linksReady?: boolean;
   ownerPid?: number;
+  owner?: JobOwner;
   postError?: string | null;
 };
 
@@ -108,7 +110,7 @@ export function readJob(path: string, checkoutId: string): Job | null {
   return readJobLog(path).jobs.find((job) => job.checkoutId === checkoutId) ?? null;
 }
 
-export function claimJob(
+export async function claimJob(
   path: string,
   input: {
     checkoutId: string;
@@ -118,13 +120,15 @@ export function claimJob(
     dryRun: boolean;
   },
   now = new Date(),
-): { job: Job; claimed: boolean } {
+): Promise<{ job: Job; claimed: boolean }> {
+  const owner = await currentJobOwner();
   const log = readJobLog(path);
   const existing = log.jobs.find((job) => job.checkoutId === input.checkoutId);
   if (existing) return { job: existing, claimed: false };
   const job: Job = {
     ...input,
     ownerPid: process.pid,
+    owner,
     status: "queued",
     result: null,
     error: null,
@@ -146,22 +150,32 @@ export function updateJob(path: string, checkoutId: string, patch: Partial<Job>)
   return job;
 }
 
-function ownerIsRunning(pid: number | undefined): boolean {
-  if (!pid) return false;
+async function ownerIsRunning(job: Job): Promise<boolean> {
+  if (job.owner) return jobOwnerIsRunning(job.owner);
+  // This process cannot own a legacy claim: every new claim has an instance token.
+  const pid = job.ownerPid;
+  if (!pid || pid === process.pid) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
   }
+  throw new Error(`Cannot verify legacy job owner PID ${pid} for ${job.checkoutId}. Stop older webhook workers. Once no worker owns this job, remove only its ownerPid from jobs.json and restart; preserve the job and payment reservations. No jobs were recovered or payments retried.`);
 }
 
 /** Never replay an interrupted payment. Surface it for explicit review instead. */
-export function recoverInterruptedJobs(path: string): void {
+export async function recoverInterruptedJobs(path: string): Promise<void> {
+  const abandoned = new Map<string, Job>();
+  for (const job of readJobLog(path).jobs) {
+    if (job.status !== "queued" && job.status !== "running" && !(job.status === "done" && job.linksReady === false)) continue;
+    if (!await ownerIsRunning(job)) abandoned.set(job.checkoutId, job);
+  }
+  // Other workers can finish while ownership is checked; never overwrite that newer state.
   const log = readJobLog(path);
   let changed = false;
   for (const job of log.jobs) {
-    if (ownerIsRunning(job.ownerPid)) continue;
+    const prior = abandoned.get(job.checkoutId);
+    if (!prior || job.ownerPid !== prior.ownerPid || JSON.stringify(job.owner) !== JSON.stringify(prior.owner)) continue;
     if (job.status === "queued" || job.status === "running") {
       job.status = "failed";
       job.error = "This job was interrupted. No automatic retry was made. Inspect the payment reservations, receipts, and trace before starting another paid checkout; a deposit may already have been sent.";

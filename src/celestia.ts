@@ -68,7 +68,7 @@ export function unpostedLines(lines: string[], log: PostLog): { start: number; l
     if (!post.mock) return true;
     // Old dry-runs sometimes covered earlier real receipts. Those still need publication.
     const event = JSON.parse(line) as { type: string; dryRun?: boolean; checkoutId?: string; who?: string; what?: string };
-    return (event.type === "inference" && event.dryRun === true) ||
+    return (event.type === "inference" && event.dryRun === true && !event.checkoutId) ||
       (event.type === "sale" && event.checkoutId === "dry_run_not_a_stripe_payment") ||
       (event.type === "human" && event.who === "demo" && event.what === "skipped the Eden deposit and the Mocha submit");
   }));

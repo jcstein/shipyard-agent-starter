@@ -94,7 +94,7 @@ describe("stripe", () => {
       ),
       stderr: "",
     });
-    const server = startWebhook(cfg, { postDeps: { run } });
+    const server = await startWebhook(cfg, { postDeps: { run } });
     const port = await new Promise<number>((resolve, reject) => {
       server.listen(0, "127.0.0.1", () => {
         const address = server.address();

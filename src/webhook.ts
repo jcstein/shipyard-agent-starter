@@ -4,7 +4,7 @@ import { startWebhook } from "./stripe.ts";
 const cfg = loadConfig();
 let server;
 try {
-  server = startWebhook(cfg);
+  server = await startWebhook(cfg);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

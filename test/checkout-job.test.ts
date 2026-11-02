@@ -54,7 +54,7 @@ function completedEvent(input: {
   });
 }
 
-async function listen(server: ReturnType<typeof startWebhook>): Promise<number> {
+async function listen(server: Awaited<ReturnType<typeof startWebhook>>): Promise<number> {
   return new Promise((resolve, reject) => {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -120,7 +120,7 @@ function scriptedHelper(failure?: string): { run: HelperRun; count: () => number
 const FUNDS_ERROR =
   "insufficient funds: celestia1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7y7k3e balance 0utia. Fund this address at https://mocha.celenium.io/faucet\n";
 
-async function close(server: ReturnType<typeof startWebhook>): Promise<void> {
+async function close(server: Awaited<ReturnType<typeof startWebhook>>): Promise<void> {
   await settleJobs(server);
   await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }
@@ -320,7 +320,7 @@ describe("paid checkout", () => {
     const helper = scriptedHelper();
     const logs: string[] = [];
     const originalLog = console.log;
-    const server = startWebhook(cfg, {
+    const server = await startWebhook(cfg, {
       fetchImpl: async () => {
         fetches += 1;
         throw new Error("dry-run called the network");
@@ -444,7 +444,7 @@ describe("paid checkout", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const server = startWebhook(cfg, {
+    const server = await startWebhook(cfg, {
       runJob: async () => {
         started += 1;
         await gate;
@@ -486,7 +486,7 @@ describe("paid checkout", () => {
       JOBS_PATH: join(dir, "jobs.json"),
       STRIPE_WEBHOOK_SECRET: secret,
     });
-    const server = startWebhook(cfg, {
+    const server = await startWebhook(cfg, {
       runJob: async () => {
         throw new Error("unpaid session started a job");
       },
@@ -546,7 +546,7 @@ describe("paid checkout", () => {
       SPEND_CAP_TIA: "0.05",
     });
     const helper = scriptedHelper();
-    const server = startWebhook(cfg, { fetchImpl, postDeps: { run: helper.run } });
+    const server = await startWebhook(cfg, { fetchImpl, postDeps: { run: helper.run } });
     const port = await listen(server);
     try {
       const raw = completedEvent({ id: "cs_test_live", paymentIntent: "pi_test_live", task: "name a price" });
@@ -674,7 +674,7 @@ describe("paid checkout", () => {
     const helper = scriptedHelper(FUNDS_ERROR);
     const errors: string[] = [];
     const originalError = console.error;
-    const server = startWebhook(cfg, { fetchImpl, postDeps: { run: helper.run } });
+    const server = await startWebhook(cfg, { fetchImpl, postDeps: { run: helper.run } });
     const port = await listen(server);
     console.error = (...args: unknown[]) => {
       errors.push(args.map((arg) => String(arg)).join(" "));
@@ -742,7 +742,7 @@ describe("paid checkout", () => {
       JOBS_PATH: join(dir, "jobs.json"),
       TRACE_DIR: join(dir, "traces"),
     });
-    const { job } = claimJob(cfg.jobsPath, {
+    const { job } = await claimJob(cfg.jobsPath, {
       checkoutId: "cs_test_nokey",
       stripePaymentId: "pi_test_nokey",
       task: "hello",
@@ -798,7 +798,7 @@ describe("paid checkout", () => {
       livemode: true,
     });
     assert.equal(readReceiptLines(cfg.receiptsPath).filter((line) => line.includes('"type":"sale"')).length, 1);
-    const { job } = claimJob(cfg.jobsPath, {
+    const { job } = await claimJob(cfg.jobsPath, {
       checkoutId: "cs_test_prior",
       stripePaymentId: "pi_test_prior",
       task: "again",

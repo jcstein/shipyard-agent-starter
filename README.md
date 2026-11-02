@@ -140,11 +140,13 @@ Payments sharing `RECEIPTS_PATH` are serialized within one process. A second pro
 
 ### Interrupted work and publication
 
-On webhook startup, unfinished jobs whose owner process has stopped are marked failed with review instructions. They are never paid again automatically, and replaying the webhook still cannot start another job. A completed result survives an interrupted Mocha post; its page shows recovery instructions instead of refreshing forever. A recorded catch-up post supplies the blob link and clears that waiting display.
+On webhook startup, unfinished jobs whose owner process has stopped are marked failed with review instructions. Each worker proves its instance token through a local Unix socket; a reused PID does not keep an abandoned job running. An unresponsive owner stops startup instead of failing possibly active work. Job files and owner sockets are for workers on the same local machine, not shared storage across hosts. Jobs are never paid again automatically, and replaying the webhook still cannot start another job. A completed result survives an interrupted Mocha post; its page shows recovery instructions instead of refreshing forever. A recorded catch-up post supplies the blob link and clears that waiting display.
+
+Stop older webhook workers before upgrading. For older PID-only records, a live foreign PID cannot prove which process claimed the job, so startup stops with the affected checkout id. After confirming no old worker owns that job, remove only its `ownerPid` from `jobs.json` and restart. Keep the job and payment reservations; recovery marks the job interrupted without replaying it. There is no need to terminate an unrelated process whose PID was reused.
 
 Posting is serialized using `<POSTS_PATH>.lock`; payments use `<RECEIPTS_PATH>.payment.lock`. Normal completion removes these locks. A killed process deliberately leaves its lock in place: stop all processes using those files, inspect the trace and transaction/blob outcome, and only then remove the specific abandoned lock. Keep the payment reservations. For Mocha, a submit may have succeeded before its record was saved, so blindly retrying can publish a duplicate. After checking that outcome, `npm run post` can catch up unposted lines. No recovery command sends another Eden deposit.
 
-Dry-run mock records cover only the demo's new lines. Catch-up also recognizes older mixed mock records and still publishes the real receipts they accidentally covered; demo-only lines remain local.
+Dry-run mock records cover only the demo's new lines. Catch-up also recognizes older mixed mock records and still publishes the checkout receipts they accidentally covered, including mock inference from a dry-run Stripe checkout; standalone demo lines remain local.
 
 The private key is read from `EDEN_PRIVATE_KEY` and used only to derive the address and to sign. It is never written to a receipt, a blob, the chat prompt, or a live trace. Receipts store `sha256` of the payment header, not the signature. A live trace does store the signed deposit transaction and the `Payment-Signature` header.
 

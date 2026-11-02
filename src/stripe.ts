@@ -184,9 +184,9 @@ export type WebhookOptions = {
   postDeps?: ReceiptPostDeps;
 };
 
-export function startWebhook(cfg: Config, options: WebhookOptions = {}): Server {
+export async function startWebhook(cfg: Config, options: WebhookOptions = {}): Promise<Server> {
   if (!cfg.stripeWebhookSecret) throw new Error("STRIPE_WEBHOOK_SECRET is required");
-  recoverInterruptedJobs(cfg.jobsPath);
+  await recoverInterruptedJobs(cfg.jobsPath);
   const runJob =
     options.runJob ??
     ((config, job) => fulfillCheckout(config, job, options.fetchImpl ?? fetch, options.postDeps));
@@ -230,7 +230,7 @@ export function startWebhook(cfg: Config, options: WebhookOptions = {}): Server 
       const task = taskFromSession(session);
       recordSale(cfg, session, task);
       if (!session.id) throw new Error("checkout session has no id");
-      const { job, claimed } = claimJob(cfg.jobsPath, {
+      const { job, claimed } = await claimJob(cfg.jobsPath, {
         checkoutId: session.id,
         stripePaymentId: stripePaymentId(session),
         task,

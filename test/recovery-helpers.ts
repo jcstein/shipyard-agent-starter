@@ -17,9 +17,9 @@ export function config(extra: NodeJS.ProcessEnv = {}, dir = mkdtempSync(join(tmp
     HOUSTON_BASE_URL: "https://houston.invalid/v1", ...extra });
 }
 
-export function job(cfg: Config, id: string) {
+export async function job(cfg: Config, id: string) {
   recordSale(cfg, { id, payment_intent: `pi_${id}`, amount_total: 500, currency: "gbp", livemode: false });
-  return claimJob(cfg.jobsPath, { checkoutId: id, stripePaymentId: `pi_${id}`, task: "Say hello", livemode: false, dryRun: cfg.mode !== "live" }).job;
+  return (await claimJob(cfg.jobsPath, { checkoutId: id, stripePaymentId: `pi_${id}`, task: "Say hello", livemode: false, dryRun: cfg.mode !== "live" })).job;
 }
 
 export function deferred() {
